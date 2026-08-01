@@ -1,0 +1,16 @@
+name: Finalize generation jobs
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Poll fal.ai/Higgsfield jobs and finalize any that finished
+        run: |
+          curl -sS --fail \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "https://creative-engine-seven.vercel.app/api/cron/finalize-generations?x-vercel-protection-bypass=${{ secrets.VERCEL_BYPASS_SECRET }}&x-vercel-set-bypass-cookie=true"

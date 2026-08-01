@@ -85,6 +85,15 @@ export default function ProductForm({
         <input name="offer" defaultValue={product?.offer ?? ""} className={inputClass} />
       </FormField>
 
+      <label className="flex items-center gap-2 text-sm font-medium">
+        <input
+          type="checkbox"
+          name="auto_generate"
+          defaultChecked={product?.auto_generate ?? false}
+        />
+        Enable automated concept + creative generation for this product
+      </label>
+
       {existingImages && existingImages.length > 0 ? (
         <div>
           <p className="text-sm font-medium">Current Images</p>

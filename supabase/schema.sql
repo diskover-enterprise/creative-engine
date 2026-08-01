@@ -199,3 +199,10 @@ alter table generation_jobs enable row level security;
 -- was generated from.
 alter table generation_jobs add column if not exists source_creative_id uuid references creatives (id) on delete set null;
 alter table creatives add column if not exists source_creative_id uuid references creatives (id) on delete set null;
+
+-- Creative Engine — Phase 5 schema addition (automated concept + creative generation)
+-- `auto_generate` opts a Product into the automated pipeline. `triggered_by`
+-- distinguishes automated jobs from manual ones so the daily generation cap
+-- only gates the automated pipeline, not a user's own manual clicks.
+alter table products add column if not exists auto_generate boolean not null default false;
+alter table generation_jobs add column if not exists triggered_by text not null default 'manual';

@@ -18,6 +18,7 @@ export interface Product {
   audience: string | null;
   benefits: string | null;
   offer: string | null;
+  auto_generate: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -86,6 +87,7 @@ export interface Creative {
 }
 
 export type GenerationJobStatus = "processing" | "completed" | "failed";
+export type GenerationJobTrigger = "manual" | "automated";
 
 export interface GenerationJob {
   id: string;
@@ -97,6 +99,7 @@ export interface GenerationJob {
   error: string | null;
   creative_id: string | null;
   source_creative_id: string | null;
+  triggered_by: GenerationJobTrigger;
   created_at: string;
   updated_at: string;
 }

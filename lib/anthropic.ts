@@ -61,7 +61,7 @@ Objective: ${campaign.objective ?? "not specified"}
     model: "claude-opus-5",
     max_tokens: 2048,
     system:
-      "You are a creative strategist for digital advertising. Given brand and product context, propose exactly 3 distinct, actionable creative concept directions for an ad campaign. Each concept must take a genuinely different angle from the others (different emotion, different scenario, or different audience appeal) -- do not produce near-duplicates. Keep each field concise and concrete, ready to hand to a designer.",
+      "You are a creative strategist for digital advertising. Given brand and product context, propose exactly 3 distinct, actionable creative concept directions for an ad campaign. Each concept must take a genuinely different angle from the others (different emotion, different scenario, or different audience appeal) -- do not produce near-duplicates. Keep each field concise and concrete, ready to hand to a designer. Real footage of real people will often be mixed with AI-generated visuals, so favor authentic, lived-in, UGC-style settings and scenes over glossy, studio-perfect ones -- AI-generated output should not look conspicuously polished or synthetic.",
     messages: [{ role: "user", content: prompt }],
     output_config: { format: zodOutputFormat(ConceptSuggestionsResponseSchema) },
   });

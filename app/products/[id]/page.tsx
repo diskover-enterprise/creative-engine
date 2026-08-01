@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { deleteProduct } from "../actions";
 import DeleteButton from "@/components/DeleteButton";
+import RunAutomationButton from "@/components/RunAutomationButton";
 import type { Campaign, Product } from "@/types";
 
 type ProductDetail = Product & {
@@ -107,6 +108,12 @@ export default async function ProductDetailPage({
           }
         />
       </dl>
+
+      {product.auto_generate ? (
+        <div className="mt-6">
+          <RunAutomationButton productId={product.id} />
+        </div>
+      ) : null}
 
       <section className="mt-10">
         <div className="flex items-center justify-between">

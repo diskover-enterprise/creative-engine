@@ -44,5 +44,14 @@ export function buildConceptPrompt(
     concept.format === "video" ? "short vertical ad video" : "static ad image";
   lines.push(`Format: ${formatLabel}, aspect ratio ${concept.aspect_ratio}.`);
 
+  // Real footage of real people gets mixed in with AI-generated video, so
+  // AI-generated video specifically should read as natural and candid, not
+  // like an obviously synthetic, overly polished ad.
+  if (concept.format === "video") {
+    lines.push(
+      "Natural, candid, handheld feel -- avoid an overly polished, glossy, or artificial studio look."
+    );
+  }
+
   return lines.join(" ");
 }
