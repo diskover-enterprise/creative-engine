@@ -3,12 +3,15 @@ import { notFound } from "next/navigation";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { deleteCampaign } from "../actions";
 import DeleteButton from "@/components/DeleteButton";
-import SuggestConceptsButton from "@/components/SuggestConceptsButton";
-import type { Campaign, Concept } from "@/types";
+import SuggestAdSetsButton from "@/components/SuggestAdSetsButton";
+import RunAutomationButton from "@/components/RunAutomationButton";
+import type { Campaign, AdSet } from "@/types";
+
+type CampaignDetail = Campaign & {
+  campaign_images: { id: string; url: string; position: number }[];
+};
 
 export const dynamic = "force-dynamic";
-
-type CampaignWithProduct = Campaign & { products: { id: string; name: string } | null };
 
 const STATUS_LABELS: Record<Campaign["status"], string> = {
   draft: "Draft",
@@ -25,14 +28,14 @@ export default async function CampaignDetailPage({
   const { id } = await params;
   const supabase = getSupabaseServerClient();
 
-  const [{ data: campaignData }, { data: conceptsData }] = await Promise.all([
+  const [{ data: campaignData }, { data: adSetsData }] = await Promise.all([
     supabase
       .from("campaigns")
-      .select("*, products(id, name)")
+      .select("*, campaign_images(id, url, position)")
       .eq("id", id)
       .single(),
     supabase
-      .from("concepts")
+      .from("ad_sets")
       .select("id, name, format")
       .eq("campaign_id", id)
       .order("created_at", { ascending: false }),
@@ -42,21 +45,18 @@ export default async function CampaignDetailPage({
     notFound();
   }
 
-  const campaign = campaignData as CampaignWithProduct;
-  const concepts = (conceptsData ?? []) as Pick<Concept, "id" | "name" | "format">[];
+  const campaign = campaignData as CampaignDetail;
+  const images = [...campaign.campaign_images].sort((a, b) => a.position - b.position);
+  const adSets = (adSetsData ?? []) as Pick<AdSet, "id" | "name" | "format">[];
   const boundDelete = deleteCampaign.bind(null, campaign.id);
 
   return (
-    <div className="max-w-2xl">
+    <div className="max-w-3xl">
       <div className="flex items-start justify-between gap-4">
-        <div>
-          {campaign.products ? (
-            <Link
-              href={`/products/${campaign.products.id}`}
-              className="text-sm text-foreground/60 hover:underline"
-            >
-              {campaign.products.name}
-            </Link>
+        <div className="flex items-center gap-4">
+          {campaign.logo_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={campaign.logo_url} alt="" className="h-14 w-14 rounded object-cover" />
           ) : null}
           <h1 className="text-2xl font-semibold">{campaign.name}</h1>
         </div>
@@ -69,12 +69,47 @@ export default async function CampaignDetailPage({
           </Link>
           <DeleteButton
             action={boundDelete}
-            confirmText={`Delete "${campaign.name}"? This also deletes its ${concepts.length} concept(s) and their creatives. This cannot be undone.`}
+            confirmText={`Delete "${campaign.name}"? This also deletes its ${adSets.length} ad set(s) and their ads. This cannot be undone.`}
           />
         </div>
       </div>
 
+      {images.length > 0 && (
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          {images.map((image) => (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              key={image.id}
+              src={image.url}
+              alt=""
+              className="aspect-square rounded-lg object-cover"
+            />
+          ))}
+        </div>
+      )}
+
       <dl className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Detail label="Description" value={campaign.description} />
+        <Detail label="Brand Voice" value={campaign.brand_voice} />
+        <Detail label="Visual Style" value={campaign.visual_style} />
+        <Detail
+          label="Landing Page"
+          value={
+            campaign.landing_page_url ? (
+              <a
+                href={campaign.landing_page_url}
+                target="_blank"
+                rel="noreferrer"
+                className="underline"
+              >
+                {campaign.landing_page_url}
+              </a>
+            ) : null
+          }
+        />
+        <Detail label="Target Audience" value={campaign.audience} />
+        <Detail label="Benefits" value={campaign.benefits} />
+        <Detail label="Offer" value={campaign.offer} />
         <Detail label="Status" value={STATUS_LABELS[campaign.status]} />
         <Detail label="Objective" value={campaign.objective} />
         <Detail label="Start Date" value={campaign.start_date} />
@@ -84,33 +119,39 @@ export default async function CampaignDetailPage({
         </div>
       </dl>
 
+      {campaign.auto_generate ? (
+        <div className="mt-6">
+          <RunAutomationButton campaignId={campaign.id} />
+        </div>
+      ) : null}
+
       <section className="mt-10">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Concepts</h2>
+          <h2 className="text-lg font-semibold">Ad Sets</h2>
           <Link
-            href={`/campaigns/${campaign.id}/concepts/new`}
+            href={`/campaigns/${campaign.id}/ad-sets/new`}
             className="rounded-md bg-foreground px-3 py-1.5 text-sm font-medium text-background"
           >
-            + New Concept
+            + New Ad Set
           </Link>
         </div>
 
         <div className="mt-3">
-          <SuggestConceptsButton campaignId={campaign.id} />
+          <SuggestAdSetsButton campaignId={campaign.id} />
         </div>
 
-        {concepts.length === 0 ? (
-          <p className="mt-2 text-sm text-foreground/60">No concepts yet.</p>
+        {adSets.length === 0 ? (
+          <p className="mt-2 text-sm text-foreground/60">No ad sets yet.</p>
         ) : (
           <ul className="mt-3 space-y-1">
-            {concepts.map((concept) => (
-              <li key={concept.id} className="text-sm">
-                <Link href={`/concepts/${concept.id}`} className="hover:underline">
-                  {concept.name}
+            {adSets.map((adSet) => (
+              <li key={adSet.id} className="text-sm">
+                <Link href={`/ad-sets/${adSet.id}`} className="hover:underline">
+                  {adSet.name}
                 </Link>
                 <span className="text-foreground/50">
                   {" "}
-                  — {concept.format === "video" ? "Video" : "Static Image"}
+                  — {adSet.format === "video" ? "Video" : "Static Image"}
                 </span>
               </li>
             ))}
@@ -121,7 +162,7 @@ export default async function CampaignDetailPage({
   );
 }
 
-function Detail({ label, value }: { label: string; value: string | null }) {
+function Detail({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
       <dt className="text-xs font-medium uppercase tracking-wide text-foreground/40">

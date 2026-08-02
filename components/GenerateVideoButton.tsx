@@ -3,19 +3,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FormError } from "@/components/FormStatus";
-import { startVideoGeneration } from "@/app/creatives/actions";
+import { startVideoGeneration } from "@/app/ads/actions";
 
 type Phase = "idle" | "starting" | "processing" | "failed";
 
 const POLL_INTERVAL_MS = 3000;
 
 export default function GenerateVideoButton({
-  creativeId,
-  conceptId,
+  adId,
+  adSetId,
   initialJobId,
 }: {
-  creativeId: string;
-  conceptId: string;
+  adId: string;
+  adSetId: string;
   // Set when the page loads and finds a job already in flight (e.g. the
   // browser was closed mid-generation last time) -- resumes polling
   // immediately instead of leaving it stuck at "processing" forever with a
@@ -35,7 +35,7 @@ export default function GenerateVideoButton({
 
         if (data.status === "completed") {
           if (intervalRef.current) clearInterval(intervalRef.current);
-          router.push(`/concepts/${conceptId}`);
+          router.push(`/ad-sets/${adSetId}`);
         } else if (data.status === "failed") {
           if (intervalRef.current) clearInterval(intervalRef.current);
           setError(data.error ?? "Generation failed.");
@@ -43,7 +43,7 @@ export default function GenerateVideoButton({
         }
       }, POLL_INTERVAL_MS);
     },
-    [router, conceptId]
+    [router, adSetId]
   );
 
   useEffect(() => {
@@ -59,7 +59,7 @@ export default function GenerateVideoButton({
     setError(null);
     setPhase("starting");
 
-    const result = await startVideoGeneration(creativeId);
+    const result = await startVideoGeneration(adId);
     if ("error" in result) {
       setError(result.error);
       setPhase("failed");

@@ -3,17 +3,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FormError } from "@/components/FormStatus";
-import { startImageGeneration } from "@/app/creatives/actions";
+import { startImageGeneration } from "@/app/ads/actions";
 
 type Phase = "idle" | "starting" | "processing" | "failed";
 
 const POLL_INTERVAL_MS = 3000;
 
 export default function GenerateImageButton({
-  conceptId,
+  adSetId,
   initialJobId,
 }: {
-  conceptId: string;
+  adSetId: string;
   // Set when the page loads and finds a job already in flight (e.g. the
   // browser was closed mid-generation last time) -- resumes polling
   // immediately instead of leaving it stuck at "processing" forever with a
@@ -58,7 +58,7 @@ export default function GenerateImageButton({
     setError(null);
     setPhase("starting");
 
-    const result = await startImageGeneration(conceptId);
+    const result = await startImageGeneration(adSetId);
     if ("error" in result) {
       setError(result.error);
       setPhase("failed");

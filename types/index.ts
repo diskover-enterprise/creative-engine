@@ -1,42 +1,20 @@
-export interface Brand {
+export type CampaignStatus = "draft" | "active" | "paused" | "completed";
+
+// A Campaign is the single top-level entity: brand identity (voice, visual
+// style, logo), product details (audience, benefits, offer), and campaign
+// scheduling all live on one record. Ad Sets attach directly to it.
+export interface Campaign {
   id: string;
   name: string;
   description: string | null;
   brand_voice: string | null;
   visual_style: string | null;
   logo_url: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface Product {
-  id: string;
-  brand_id: string;
-  name: string;
-  description: string | null;
   landing_page_url: string | null;
   audience: string | null;
   benefits: string | null;
   offer: string | null;
   auto_generate: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface ProductImage {
-  id: string;
-  product_id: string;
-  url: string;
-  position: number;
-  created_at: string;
-}
-
-export type CampaignStatus = "draft" | "active" | "paused" | "completed";
-
-export interface Campaign {
-  id: string;
-  product_id: string;
-  name: string;
   objective: string | null;
   status: CampaignStatus;
   start_date: string | null;
@@ -46,9 +24,17 @@ export interface Campaign {
   updated_at: string;
 }
 
-export type ConceptFormat = "static_image" | "video";
+export interface CampaignImage {
+  id: string;
+  campaign_id: string;
+  url: string;
+  position: number;
+  created_at: string;
+}
 
-export interface Concept {
+export type AdSetFormat = "static_image" | "video";
+
+export interface AdSet {
   id: string;
   campaign_id: string;
   name: string;
@@ -59,29 +45,29 @@ export interface Concept {
   setting_scene: string | null;
   key_message: string | null;
   call_to_action: string | null;
-  format: ConceptFormat;
+  format: AdSetFormat;
   aspect_ratio: string;
   generated_prompt: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export type CreativeType = "image" | "video";
-export type CreativeSource = "manual_upload" | "ai_generated";
-export type CreativeStatus = "draft" | "approved" | "rejected";
+export type AdType = "image" | "video";
+export type AdSource = "manual_upload" | "ai_generated";
+export type AdStatus = "draft" | "approved" | "rejected";
 
-export interface Creative {
+export interface Ad {
   id: string;
-  concept_id: string;
+  ad_set_id: string;
   label: string | null;
-  type: CreativeType;
-  source: CreativeSource;
+  type: AdType;
+  source: AdSource;
   provider: string | null;
   generation_prompt: string | null;
   asset_url: string | null;
-  status: CreativeStatus;
+  status: AdStatus;
   notes: string | null;
-  source_creative_id: string | null;
+  source_ad_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -91,14 +77,14 @@ export type GenerationJobTrigger = "manual" | "automated";
 
 export interface GenerationJob {
   id: string;
-  concept_id: string;
+  ad_set_id: string;
   provider: string;
   external_request_id: string;
   status: GenerationJobStatus;
   prompt: string | null;
   error: string | null;
-  creative_id: string | null;
-  source_creative_id: string | null;
+  ad_id: string | null;
+  source_ad_id: string | null;
   triggered_by: GenerationJobTrigger;
   created_at: string;
   updated_at: string;

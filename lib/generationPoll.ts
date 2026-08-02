@@ -7,7 +7,7 @@ import type { GenerationJob } from "@/types";
 export type Supabase = ReturnType<typeof getSupabaseServerClient>;
 export type PollResult =
   | { status: "processing" }
-  | { status: "completed"; creativeId: string }
+  | { status: "completed"; adId: string }
   | { status: "failed"; error: string };
 
 async function markFailed(supabase: Supabase, jobId: string, message: string): Promise<PollResult> {
@@ -41,7 +41,7 @@ async function pollFalJob(supabase: Supabase, job: GenerationJob): Promise<PollR
     const imageBytes = new Uint8Array(await imageResponse.arrayBuffer());
 
     const extension = generated.contentType === "image/png" ? "png" : "jpg";
-    const path = `${job.concept_id}/${Date.now()}-fal-generated.${extension}`;
+    const path = `${job.ad_set_id}/${Date.now()}-fal-generated.${extension}`;
 
     const { error: uploadError } = await supabase.storage
       .from("creative-assets")
@@ -55,10 +55,10 @@ async function pollFalJob(supabase: Supabase, job: GenerationJob): Promise<PollR
       data: { publicUrl },
     } = supabase.storage.from("creative-assets").getPublicUrl(path);
 
-    const { data: creative, error: insertError } = await supabase
-      .from("creatives")
+    const { data: ad, error: insertError } = await supabase
+      .from("ads")
       .insert({
-        concept_id: job.concept_id,
+        ad_set_id: job.ad_set_id,
         type: "image",
         source: "ai_generated",
         provider: "fal-ai",
@@ -69,25 +69,25 @@ async function pollFalJob(supabase: Supabase, job: GenerationJob): Promise<PollR
       .select("id")
       .single();
 
-    if (insertError || !creative) {
+    if (insertError || !ad) {
       const storagePath = getStoragePathFromPublicUrl(publicUrl, "creative-assets");
       if (storagePath) {
         await supabase.storage.from("creative-assets").remove([storagePath]);
       }
-      throw new Error(insertError?.message ?? "Failed to save the generated creative.");
+      throw new Error(insertError?.message ?? "Failed to save the generated ad.");
     }
 
     await supabase
       .from("generation_jobs")
-      .update({ status: "completed", creative_id: creative.id })
+      .update({ status: "completed", ad_id: ad.id })
       .eq("id", job.id);
 
-    return { status: "completed", creativeId: creative.id };
+    return { status: "completed", adId: ad.id };
   } catch (err) {
     return markFailed(
       supabase,
       job.id,
-      err instanceof Error ? err.message : "Failed to finalize the generated creative."
+      err instanceof Error ? err.message : "Failed to finalize the generated ad."
     );
   }
 }
@@ -124,7 +124,7 @@ async function pollHiggsfieldJob(supabase: Supabase, job: GenerationJob): Promis
       throw new Error("Failed to download the generated video from Higgsfield.");
     }
     const videoBytes = new Uint8Array(await videoResponse.arrayBuffer());
-    const path = `${job.concept_id}/${Date.now()}-higgsfield-generated.mp4`;
+    const path = `${job.ad_set_id}/${Date.now()}-higgsfield-generated.mp4`;
 
     const { error: uploadError } = await supabase.storage
       .from("creative-assets")
@@ -138,40 +138,40 @@ async function pollHiggsfieldJob(supabase: Supabase, job: GenerationJob): Promis
       data: { publicUrl },
     } = supabase.storage.from("creative-assets").getPublicUrl(path);
 
-    const { data: creative, error: insertError } = await supabase
-      .from("creatives")
+    const { data: ad, error: insertError } = await supabase
+      .from("ads")
       .insert({
-        concept_id: job.concept_id,
+        ad_set_id: job.ad_set_id,
         type: "video",
         source: "ai_generated",
         provider: "higgsfield",
         generation_prompt: job.prompt,
         asset_url: publicUrl,
         status: "draft",
-        source_creative_id: job.source_creative_id,
+        source_ad_id: job.source_ad_id,
       })
       .select("id")
       .single();
 
-    if (insertError || !creative) {
+    if (insertError || !ad) {
       const storagePath = getStoragePathFromPublicUrl(publicUrl, "creative-assets");
       if (storagePath) {
         await supabase.storage.from("creative-assets").remove([storagePath]);
       }
-      throw new Error(insertError?.message ?? "Failed to save the generated creative.");
+      throw new Error(insertError?.message ?? "Failed to save the generated ad.");
     }
 
     await supabase
       .from("generation_jobs")
-      .update({ status: "completed", creative_id: creative.id })
+      .update({ status: "completed", ad_id: ad.id })
       .eq("id", job.id);
 
-    return { status: "completed", creativeId: creative.id };
+    return { status: "completed", adId: ad.id };
   } catch (err) {
     return markFailed(
       supabase,
       job.id,
-      err instanceof Error ? err.message : "Failed to finalize the generated creative."
+      err instanceof Error ? err.message : "Failed to finalize the generated ad."
     );
   }
 }
@@ -184,7 +184,7 @@ async function pollHiggsfieldJob(supabase: Supabase, job: GenerationJob): Promis
 export async function pollGenerationJob(supabase: Supabase, job: GenerationJob): Promise<PollResult> {
   if (job.status === "completed" || job.status === "failed") {
     return job.status === "completed"
-      ? { status: "completed", creativeId: job.creative_id! }
+      ? { status: "completed", adId: job.ad_id! }
       : { status: "failed", error: job.error ?? "Unknown error." };
   }
 

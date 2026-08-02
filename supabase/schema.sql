@@ -206,3 +206,111 @@ alter table creatives add column if not exists source_creative_id uuid reference
 -- only gates the automated pipeline, not a user's own manual clicks.
 alter table products add column if not exists auto_generate boolean not null default false;
 alter table generation_jobs add column if not exists triggered_by text not null default 'manual';
+
+-- Creative Engine — Phase 6 schema addition (merge Brand + Product + Campaign
+-- into a single Campaign entity). Keeping three separate records per ad line
+-- added form fatigue without real benefit, so Concepts now attach directly to
+-- one Campaign that carries everything: brand identity, product details, and
+-- campaign scheduling. Guarded by the `products` table's existence so this
+-- whole block is a no-op once it's already run.
+do $$
+begin
+  if exists (select 1 from information_schema.tables where table_schema = 'public' and table_name = 'products') then
+
+    alter table campaigns add column if not exists description text;
+    alter table campaigns add column if not exists brand_voice text;
+    alter table campaigns add column if not exists visual_style text;
+    alter table campaigns add column if not exists logo_url text;
+    alter table campaigns add column if not exists landing_page_url text;
+    alter table campaigns add column if not exists audience text;
+    alter table campaigns add column if not exists benefits text;
+    alter table campaigns add column if not exists offer text;
+    alter table campaigns add column if not exists auto_generate boolean not null default false;
+
+    -- Campaigns created below from a standalone Brand (no Product) have no
+    -- product_id to set. It's dropped entirely at the end of this block, but
+    -- must stop being NOT NULL before then.
+    alter table campaigns alter column product_id drop not null;
+
+    -- Backfill Campaigns that already exist from their Product + Brand.
+    update campaigns c
+    set
+      description = p.description,
+      brand_voice = b.brand_voice,
+      visual_style = b.visual_style,
+      logo_url = b.logo_url,
+      landing_page_url = p.landing_page_url,
+      audience = p.audience,
+      benefits = p.benefits,
+      offer = p.offer,
+      auto_generate = p.auto_generate
+    from products p
+    join brands b on b.id = p.brand_id
+    where c.product_id = p.id;
+
+    -- Products that never had a Campaign yet become their own Campaign, so no
+    -- data entered so far is lost. product_id is kept for one more step (the
+    -- campaign_images backfill below) and dropped at the end of this block.
+    insert into campaigns (
+      product_id, name, description, brand_voice, visual_style, logo_url,
+      landing_page_url, audience, benefits, offer, auto_generate, status
+    )
+    select
+      p.id, p.name, p.description, b.brand_voice, b.visual_style, b.logo_url,
+      p.landing_page_url, p.audience, p.benefits, p.offer, p.auto_generate, 'draft'
+    from products p
+    join brands b on b.id = p.brand_id
+    where not exists (select 1 from campaigns c where c.product_id = p.id);
+
+    -- Brands with no Products at all still become a standalone Campaign.
+    insert into campaigns (name, description, brand_voice, visual_style, logo_url, status)
+    select b.name, b.description, b.brand_voice, b.visual_style, b.logo_url, 'draft'
+    from brands b
+    where not exists (select 1 from products p where p.brand_id = b.id);
+
+    -- Product images move onto whichever Campaign their Product became.
+    alter table product_images add column if not exists campaign_id uuid references campaigns (id) on delete cascade;
+    update product_images pi
+    set campaign_id = c.id
+    from campaigns c
+    where c.product_id = pi.product_id;
+
+    alter table product_images rename to campaign_images;
+    alter table campaign_images alter column campaign_id set not null;
+    alter table campaign_images drop column product_id;
+
+    alter table campaigns drop column product_id;
+    drop table products;
+    drop table brands;
+
+  end if;
+end $$;
+
+create index if not exists campaign_images_campaign_id_idx on campaign_images (campaign_id);
+
+-- Creative Engine — Phase 7 schema addition (rename Concept -> Ad Set,
+-- Creative -> Ad). Matches standard ad-platform vocabulary (Campaign > Ad Set
+-- > Ad). Pure rename, no structural change -- guarded by the `concepts`
+-- table's existence so this whole block is a no-op once it's already run.
+do $$
+begin
+  if exists (select 1 from information_schema.tables where table_schema = 'public' and table_name = 'concepts') then
+
+    alter table creatives rename column concept_id to ad_set_id;
+    alter table creatives rename column source_creative_id to source_ad_id;
+    alter table generation_jobs rename column concept_id to ad_set_id;
+    alter table generation_jobs rename column creative_id to ad_id;
+    alter table generation_jobs rename column source_creative_id to source_ad_id;
+
+    alter table concepts rename to ad_sets;
+    alter table creatives rename to ads;
+
+    alter index concepts_campaign_id_idx rename to ad_sets_campaign_id_idx;
+    alter index creatives_concept_id_idx rename to ads_ad_set_id_idx;
+    alter index generation_jobs_concept_id_idx rename to generation_jobs_ad_set_id_idx;
+
+    alter trigger concepts_set_updated_at on ad_sets rename to ad_sets_set_updated_at;
+    alter trigger creatives_set_updated_at on ads rename to ads_set_updated_at;
+
+  end if;
+end $$;

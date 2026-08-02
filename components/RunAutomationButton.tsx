@@ -3,11 +3,11 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { FormError } from "@/components/FormStatus";
-import { runAutomatedGeneration } from "@/app/products/actions";
+import { runAutomatedGeneration } from "@/app/campaigns/actions";
 
 type Phase = "idle" | "running" | "failed";
 
-export default function RunAutomationButton({ productId }: { productId: string }) {
+export default function RunAutomationButton({ campaignId }: { campaignId: string }) {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -18,7 +18,7 @@ export default function RunAutomationButton({ productId }: { productId: string }
     setSummary(null);
     setPhase("running");
 
-    const result = await runAutomatedGeneration(productId);
+    const result = await runAutomatedGeneration(campaignId);
     if ("error" in result) {
       setError(result.error);
       setPhase("failed");
@@ -26,7 +26,7 @@ export default function RunAutomationButton({ productId }: { productId: string }
     }
 
     setSummary(
-      `Created ${result.conceptsCreated} concept(s), started ${result.generationsStarted} image generation(s). They'll finish in the background -- check the Automated campaign in a bit.`
+      `Created ${result.adSetsCreated} ad set(s), started ${result.generationsStarted} image generation(s). They'll finish in the background -- check the ad sets below in a bit.`
     );
     setPhase("idle");
     router.refresh();

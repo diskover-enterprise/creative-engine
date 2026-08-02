@@ -5,7 +5,7 @@ fal.config({ credentials: process.env.FAL_KEY });
 const MODEL = "fal-ai/flux/dev";
 
 // Custom width/height per aspect ratio rather than fal's built-in presets,
-// so this stays in sync with the aspect ratios Concepts actually offer.
+// so this stays in sync with the aspect ratios Ad Sets actually offer.
 const IMAGE_SIZE_BY_ASPECT_RATIO: Record<string, { width: number; height: number }> = {
   "1:1": { width: 1024, height: 1024 },
   "4:5": { width: 864, height: 1080 },
