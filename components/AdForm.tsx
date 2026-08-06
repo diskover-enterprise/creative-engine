@@ -45,6 +45,14 @@ export default function AdForm({
         </select>
       </FormField>
 
+      <FormField label="Headline">
+        <input name="headline" defaultValue={ad?.headline ?? ""} className={inputClass} />
+      </FormField>
+
+      <FormField label="Caption">
+        <textarea name="caption" rows={2} defaultValue={ad?.caption ?? ""} className={inputClass} />
+      </FormField>
+
       <FormField label="Notes">
         <textarea name="notes" rows={2} defaultValue={ad?.notes ?? ""} className={inputClass} />
       </FormField>

@@ -183,6 +183,8 @@ export async function createAd(
       asset_url: assetUrl,
       status: statusOrDefault(formData),
       notes: textOrNull(formData, "notes"),
+      headline: textOrNull(formData, "headline"),
+      caption: textOrNull(formData, "caption"),
     })
     .select()
     .single();
@@ -217,6 +219,8 @@ export async function updateAd(
     type: typeOrDefault(formData),
     status: statusOrDefault(formData),
     notes: textOrNull(formData, "notes"),
+    headline: textOrNull(formData, "headline"),
+    caption: textOrNull(formData, "caption"),
   };
 
   const asset = formData.get("asset");

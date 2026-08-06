@@ -102,6 +102,13 @@ export default async function AdDetailPage({
         <p className="mt-4 text-sm text-foreground/60">No asset uploaded yet.</p>
       )}
 
+      {ad.headline || ad.caption ? (
+        <div className="mt-4">
+          {ad.headline ? <p className="text-lg font-semibold">{ad.headline}</p> : null}
+          {ad.caption ? <p className="mt-1 text-foreground/70">{ad.caption}</p> : null}
+        </div>
+      ) : null}
+
       {ad.type === "image" && ad.asset_url && ad.ad_sets ? (
         <div className="mt-4">
           {ad.ad_sets.format === "video" ? (

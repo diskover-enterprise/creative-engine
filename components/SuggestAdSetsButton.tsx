@@ -15,9 +15,11 @@ export default function SuggestAdSetsButton({ campaignId }: { campaignId: string
   const [error, setError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<AdSetSuggestion[]>([]);
   const [selected, setSelected] = useState<boolean[]>([]);
+  const [summary, setSummary] = useState<string | null>(null);
 
   async function handleSuggest() {
     setError(null);
+    setSummary(null);
     setPhase("loading");
 
     const result = await suggestAdSetsForCampaign(campaignId);
@@ -38,12 +40,15 @@ export default function SuggestAdSetsButton({ campaignId }: { campaignId: string
 
     const chosen = suggestions.filter((_, index) => selected[index]);
     const result = await saveSuggestedAdSets(campaignId, chosen);
-    if (result && "error" in result) {
+    if ("error" in result) {
       setError(result.error);
       setPhase("previewing");
       return;
     }
 
+    setSummary(
+      `Created ${result.adSetsCreated} ad set(s) and started producing ${result.generationsStarted} of them. Image ad sets will finish shortly; video ad sets get a reference image and a 5-clip script to review below.`
+    );
     setSuggestions([]);
     setPhase("idle");
     router.refresh();
@@ -102,7 +107,7 @@ export default function SuggestAdSetsButton({ campaignId }: { campaignId: string
             disabled={phase === "saving" || selectedCount === 0}
             className="rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-50"
           >
-            {phase === "saving" ? "Saving..." : `Save Selected (${selectedCount})`}
+            {phase === "saving" ? "Creating..." : `Create Selected (${selectedCount})`}
           </button>
           <button
             type="button"
@@ -120,6 +125,11 @@ export default function SuggestAdSetsButton({ campaignId }: { campaignId: string
   return (
     <div className="flex flex-col items-start gap-2">
       {error ? <FormError message={error} /> : null}
+      {summary ? (
+        <p className="rounded-md border border-black/10 bg-black/[.02] px-3 py-2 text-sm dark:border-white/10 dark:bg-white/[.03]">
+          {summary}
+        </p>
+      ) : null}
       <button
         type="button"
         onClick={handleSuggest}

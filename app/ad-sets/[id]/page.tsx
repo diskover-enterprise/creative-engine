@@ -5,11 +5,13 @@ import { deleteAdSet } from "../actions";
 import DeleteButton from "@/components/DeleteButton";
 import CopyPromptButton from "@/components/CopyPromptButton";
 import GenerateImageButton from "@/components/GenerateImageButton";
-import type { AdSet, Ad } from "@/types";
+import ClipScriptPanel from "@/components/ClipScriptPanel";
+import type { AdSet, Ad, AdClip } from "@/types";
 
 export const dynamic = "force-dynamic";
 
 type AdSetWithCampaign = AdSet & { campaigns: { id: string; name: string } | null };
+type AdListItem = Pick<Ad, "id" | "label" | "type" | "status" | "source" | "headline" | "caption">;
 
 export default async function AdSetDetailPage({
   params,
@@ -19,35 +21,59 @@ export default async function AdSetDetailPage({
   const { id } = await params;
   const supabase = getSupabaseServerClient();
 
-  const [{ data: adSetData }, { data: adsData }, { data: activeFalJob }] = await Promise.all([
-    supabase
-      .from("ad_sets")
-      .select("*, campaigns(id, name)")
-      .eq("id", id)
-      .single(),
-    supabase
-      .from("ads")
-      .select("id, label, type, status, source")
-      .eq("ad_set_id", id)
-      .order("created_at", { ascending: false }),
-    supabase
-      .from("generation_jobs")
-      .select("id")
-      .eq("ad_set_id", id)
-      .eq("provider", "fal-ai")
-      .eq("status", "processing")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-  ]);
+  const [{ data: adSetData }, { data: adsData }, { data: activeFalJob }, { data: clipsData }] =
+    await Promise.all([
+      supabase
+        .from("ad_sets")
+        .select("*, campaigns(id, name)")
+        .eq("id", id)
+        .single(),
+      supabase
+        .from("ads")
+        .select("id, label, type, status, source, headline, caption")
+        .eq("ad_set_id", id)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("generation_jobs")
+        .select("id")
+        .eq("ad_set_id", id)
+        .eq("provider", "fal-ai")
+        .eq("status", "processing")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from("ad_clips")
+        .select("*")
+        .eq("ad_set_id", id)
+        .order("clip_number", { ascending: true }),
+    ]);
 
   if (!adSetData) {
     notFound();
   }
 
   const adSet = adSetData as AdSetWithCampaign;
-  const ads = (adsData ?? []) as Pick<Ad, "id" | "label" | "type" | "status" | "source">[];
+  const ads = (adsData ?? []) as AdListItem[];
+  const clips = (clipsData ?? []) as AdClip[];
   const boundDelete = deleteAdSet.bind(null, adSet.id);
+
+  // Ad rows are only ever inserted once their asset finishes uploading (see
+  // lib/generationPoll.ts), so merely existing means the reference image is done.
+  const referenceImageReady = ads.some((ad) => ad.label === "Reference Image");
+
+  // Clip job statuses for the panel's own polling -- fetched separately so we
+  // don't have to widen the ads/generation_jobs queries above.
+  const { data: clipJobs } = clips.length
+    ? await supabase
+        .from("generation_jobs")
+        .select("id, clip_id, status")
+        .in(
+          "clip_id",
+          clips.map((clip) => clip.id)
+        )
+        .eq("status", "processing")
+    : { data: [] };
 
   return (
     <div className="max-w-2xl">
@@ -101,6 +127,19 @@ export default async function AdSetDetailPage({
         </p>
       </section>
 
+      {adSet.format === "video" ? (
+        <section className="mt-10">
+          <h2 className="text-lg font-semibold">UGC Video Script</h2>
+          <ClipScriptPanel
+            adSetId={adSet.id}
+            clips={clips}
+            referenceImageReady={referenceImageReady}
+            activeClipJobIds={(clipJobs ?? []).map((job) => job.id)}
+            hasFinalVideo={ads.some((ad) => ad.label === "Final Video Ad")}
+          />
+        </section>
+      ) : null}
+
       <section className="mt-10">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Ads</h2>
@@ -112,14 +151,16 @@ export default async function AdSetDetailPage({
           </Link>
         </div>
 
-        <div className="mt-3">
-          <GenerateImageButton adSetId={adSet.id} initialJobId={activeFalJob?.id} />
-        </div>
+        {adSet.format === "static_image" ? (
+          <div className="mt-3">
+            <GenerateImageButton adSetId={adSet.id} initialJobId={activeFalJob?.id} />
+          </div>
+        ) : null}
 
         {ads.length === 0 ? (
           <p className="mt-4 text-sm text-foreground/60">No ads yet.</p>
         ) : (
-          <ul className="mt-4 space-y-1">
+          <ul className="mt-4 space-y-3">
             {ads.map((ad) => (
               <li key={ad.id} className="text-sm">
                 <Link href={`/ads/${ad.id}`} className="hover:underline">
@@ -130,6 +171,12 @@ export default async function AdSetDetailPage({
                   <span className="ml-1 rounded bg-foreground/10 px-1.5 py-0.5 text-xs text-foreground/60">
                     AI
                   </span>
+                ) : null}
+                {ad.headline ? (
+                  <p className="mt-0.5 font-medium">{ad.headline}</p>
+                ) : null}
+                {ad.caption ? (
+                  <p className="text-foreground/60">{ad.caption}</p>
                 ) : null}
               </li>
             ))}

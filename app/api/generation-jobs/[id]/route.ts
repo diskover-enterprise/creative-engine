@@ -28,6 +28,8 @@ export async function GET(
   const result = await pollGenerationJob(supabase, job as GenerationJob);
 
   return NextResponse.json(
-    result.status === "completed" ? { status: "completed", adId: result.adId } : result
+    result.status === "completed"
+      ? { status: "completed", adId: result.adId, clipId: result.clipId }
+      : result
   );
 }

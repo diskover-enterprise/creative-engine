@@ -68,6 +68,25 @@ export interface Ad {
   status: AdStatus;
   notes: string | null;
   source_ad_id: string | null;
+  headline: string | null;
+  caption: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type AdClipStatus = "draft" | "processing" | "completed" | "failed";
+
+// One scene of a 5-clip UGC video script for a video Ad Set. Written up
+// front (via lib/anthropic.ts generateClipScript) so the script can be
+// reviewed/edited before spending on Higgsfield generation for each clip.
+export interface AdClip {
+  id: string;
+  ad_set_id: string;
+  clip_number: number;
+  script: string;
+  status: AdClipStatus;
+  asset_url: string | null;
+  error: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -85,6 +104,7 @@ export interface GenerationJob {
   error: string | null;
   ad_id: string | null;
   source_ad_id: string | null;
+  clip_id: string | null;
   triggered_by: GenerationJobTrigger;
   created_at: string;
   updated_at: string;
