@@ -134,6 +134,7 @@ export default async function AdSetDetailPage({
             adSetId={adSet.id}
             clips={clips}
             referenceImageReady={referenceImageReady}
+            referenceJobId={referenceImageReady ? undefined : activeFalJob?.id}
             activeClipJobIds={(clipJobs ?? []).map((job) => job.id)}
             hasFinalVideo={ads.some((ad) => ad.label === "Final Video Ad")}
           />

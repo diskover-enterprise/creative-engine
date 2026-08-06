@@ -24,12 +24,17 @@ export default function ClipScriptPanel({
   adSetId,
   clips,
   referenceImageReady,
+  referenceJobId,
   activeClipJobIds,
   hasFinalVideo,
 }: {
   adSetId: string;
   clips: AdClip[];
   referenceImageReady: boolean;
+  // Set when the reference image is still processing -- polled the same way
+  // GenerateImageButton polls a static_image Ad Set's job, so this panel
+  // doesn't just sit on "still generating" until the next cron sweep.
+  referenceJobId?: string;
   activeClipJobIds: string[];
   hasFinalVideo: boolean;
 }) {
@@ -68,6 +73,8 @@ export default function ClipScriptPanel({
   useEffect(() => {
     if (activeClipJobIds.length > 0) {
       pollJobs(activeClipJobIds);
+    } else if (referenceJobId) {
+      pollJobs([referenceJobId]);
     }
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);

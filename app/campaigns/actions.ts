@@ -7,6 +7,7 @@ import { getStoragePathFromPublicUrl } from "@/lib/supabase/storage";
 import { suggestAdSets, type AdSetSuggestion } from "@/lib/anthropic";
 import { buildAdSetPrompt } from "@/lib/promptTemplate";
 import { submitImageGeneration } from "@/lib/fal";
+import { startVideoAdSetGeneration } from "@/app/ad-sets/actions";
 import type { CampaignStatus } from "@/types";
 
 export type ActionState = { error: string } | null;
@@ -265,11 +266,13 @@ function startOfTodayUTC() {
 }
 
 // The automated pipeline for a Campaign marked auto_generate: asks Claude for
-// 3 ad set directions and saves all of them (no human preview step -- that's
-// the point of automation), then starts fal.ai image generation for as many
-// as the remaining daily budget allows. Video (Higgsfield) stays a manual
-// step from the Ad Set page -- it's slower and costlier, so automation
-// doesn't reach for it by default.
+// ad set directions and saves all of them (no human preview step -- that's
+// the point of automation), then starts production for as many as the
+// remaining daily budget allows. Image picks get their fal.ai image started
+// directly; video picks get a reference image plus their 5-clip script
+// written (via startVideoAdSetGeneration) -- clip generation itself always
+// stays a manual "Approve & Generate Clips" step, since that's real spend
+// with no review checkpoint otherwise.
 export async function runAutomatedGeneration(
   campaignId: string
 ): Promise<{ error: string } | { adSetsCreated: number; generationsStarted: number }> {
@@ -322,7 +325,7 @@ export async function runAutomatedGeneration(
   const { data: savedAdSets, error: insertError } = await supabase
     .from("ad_sets")
     .insert(adSetRows)
-    .select("id, aspect_ratio, generated_prompt");
+    .select("id, format, aspect_ratio, generated_prompt");
 
   if (insertError || !savedAdSets) {
     return { error: insertError?.message ?? "Failed to save generated ad sets." };
@@ -333,6 +336,13 @@ export async function runAutomatedGeneration(
 
   for (const adSet of toGenerate) {
     if (!adSet.generated_prompt) continue;
+
+    if (adSet.format === "video") {
+      const result = await startVideoAdSetGeneration(adSet.id, "automated");
+      if (!("error" in result)) generationsStarted += 1;
+      continue;
+    }
+
     try {
       const requestId = await submitImageGeneration(adSet.generated_prompt, adSet.aspect_ratio);
       await supabase.from("generation_jobs").insert({

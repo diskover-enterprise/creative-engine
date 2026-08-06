@@ -142,9 +142,14 @@ export async function updateAdSet(
 // (Claude), written immediately since the script is text-only and doesn't
 // need the reference image to finish first. Clips are NOT generated yet --
 // that only happens once the script is reviewed (see generateAllClips).
+// Idempotent on the reference image specifically: if one is already done or
+// already in flight (e.g. this ad set went through the automated pipeline,
+// which only starts the image and never wrote a script), this just writes
+// the missing script instead of starting a second, duplicate image.
 export async function startVideoAdSetGeneration(
-  adSetId: string
-): Promise<{ error: string } | { referenceJobId: string; clipsCreated: number }> {
+  adSetId: string,
+  triggeredBy: "manual" | "automated" = "manual"
+): Promise<{ error: string } | { referenceJobId: string | null; clipsCreated: number }> {
   const supabase = getSupabaseServerClient();
 
   const { data: adSet } = await supabase
@@ -172,29 +177,50 @@ export async function startVideoAdSetGeneration(
   const campaign = await getPromptContext(supabase, adSet.campaign_id);
   if (!campaign) return { error: "Could not find the parent campaign." };
 
-  let referenceJobId: string;
-  try {
-    const requestId = await submitImageGeneration(adSet.generated_prompt, adSet.aspect_ratio);
-    const { data: job, error } = await supabase
-      .from("generation_jobs")
-      .insert({
-        ad_set_id: adSetId,
-        provider: "fal-ai",
-        external_request_id: requestId,
-        status: "processing",
-        prompt: adSet.generated_prompt,
-      })
+  const [{ data: existingReferenceAd }, { data: existingReferenceJob }] = await Promise.all([
+    supabase
+      .from("ads")
       .select("id")
-      .single();
+      .eq("ad_set_id", adSetId)
+      .eq("label", "Reference Image")
+      .maybeSingle(),
+    supabase
+      .from("generation_jobs")
+      .select("id")
+      .eq("ad_set_id", adSetId)
+      .eq("provider", "fal-ai")
+      .eq("status", "processing")
+      .is("clip_id", null)
+      .maybeSingle(),
+  ]);
 
-    if (error || !job) {
-      return { error: error?.message ?? "Failed to record the reference image job." };
+  let referenceJobId: string | null = existingReferenceJob?.id ?? null;
+
+  if (!existingReferenceAd && !existingReferenceJob) {
+    try {
+      const requestId = await submitImageGeneration(adSet.generated_prompt, adSet.aspect_ratio);
+      const { data: job, error } = await supabase
+        .from("generation_jobs")
+        .insert({
+          ad_set_id: adSetId,
+          provider: "fal-ai",
+          external_request_id: requestId,
+          status: "processing",
+          prompt: adSet.generated_prompt,
+          triggered_by: triggeredBy,
+        })
+        .select("id")
+        .single();
+
+      if (error || !job) {
+        return { error: error?.message ?? "Failed to record the reference image job." };
+      }
+      referenceJobId = job.id;
+    } catch (err) {
+      return {
+        error: err instanceof Error ? err.message : "Failed to start the reference image generation.",
+      };
     }
-    referenceJobId = job.id;
-  } catch (err) {
-    return {
-      error: err instanceof Error ? err.message : "Failed to start the reference image generation.",
-    };
   }
 
   let script;
