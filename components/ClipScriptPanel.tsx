@@ -9,15 +9,23 @@ import {
   generateAllClips,
   stitchAdClips,
 } from "@/app/ad-sets/actions";
-import type { AdClip } from "@/types";
+import type { AdClip, AdClipRole } from "@/types";
 
 const POLL_INTERVAL_MS = 4000;
+const DEFAULT_CLIP_COUNT = 5;
+const MIN_CLIPS = 1;
+const MAX_CLIPS = 10;
 
 const STATUS_LABELS: Record<AdClip["status"], string> = {
   draft: "Draft",
   processing: "Generating...",
   completed: "Ready",
   failed: "Failed",
+};
+
+const ROLE_LABELS: Record<AdClipRole, string> = {
+  ugc: "Model UGC",
+  broll: "B-roll",
 };
 
 export default function ClipScriptPanel({
@@ -46,6 +54,8 @@ export default function ClipScriptPanel({
   const [drafts, setDrafts] = useState<Record<string, string>>(
     Object.fromEntries(clips.map((clip) => [clip.id, clip.script]))
   );
+  const [clipCount, setClipCount] = useState(DEFAULT_CLIP_COUNT);
+  const [roles, setRoles] = useState<AdClipRole[]>(Array(DEFAULT_CLIP_COUNT).fill("ugc"));
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   function pollJobs(jobIds: string[]) {
@@ -82,10 +92,24 @@ export default function ClipScriptPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function handleClipCountChange(count: number) {
+    const clamped = Math.min(MAX_CLIPS, Math.max(MIN_CLIPS, count));
+    setClipCount(clamped);
+    setRoles((current) => {
+      const next = current.slice(0, clamped);
+      while (next.length < clamped) next.push("ugc");
+      return next;
+    });
+  }
+
+  function handleRoleChange(index: number, role: AdClipRole) {
+    setRoles((current) => current.map((value, i) => (i === index ? role : value)));
+  }
+
   async function handleStart() {
     setError(null);
     setStarting(true);
-    const result = await startVideoAdSetGeneration(adSetId);
+    const result = await startVideoAdSetGeneration(adSetId, roles);
     setStarting(false);
     if ("error" in result) {
       setError(result.error);
@@ -127,15 +151,44 @@ export default function ClipScriptPanel({
 
   if (clips.length === 0) {
     return (
-      <div className="mt-3 flex flex-col items-start gap-2">
+      <div className="mt-3 flex flex-col items-start gap-3">
         {error ? <FormError message={error} /> : null}
+
+        <label className="flex items-center gap-2 text-sm">
+          Number of clips
+          <input
+            type="number"
+            min={MIN_CLIPS}
+            max={MAX_CLIPS}
+            value={clipCount}
+            onChange={(e) => handleClipCountChange(Number(e.target.value) || MIN_CLIPS)}
+            className="w-16 rounded-md border border-black/15 bg-transparent px-2 py-1 text-sm dark:border-white/15"
+          />
+        </label>
+
+        <ul className="flex w-full flex-col gap-2">
+          {roles.map((role, index) => (
+            <li key={index} className="flex items-center gap-2 text-sm">
+              <span className="w-14 text-foreground/50">Clip {index + 1}</span>
+              <select
+                value={role}
+                onChange={(e) => handleRoleChange(index, e.target.value as AdClipRole)}
+                className="rounded-md border border-black/15 bg-transparent px-2 py-1 text-sm dark:border-white/15"
+              >
+                <option value="ugc">{ROLE_LABELS.ugc}</option>
+                <option value="broll">{ROLE_LABELS.broll}</option>
+              </select>
+            </li>
+          ))}
+        </ul>
+
         <button
           type="button"
           onClick={handleStart}
           disabled={starting}
           className="rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-50"
         >
-          {starting ? "Starting..." : "Generate Reference Image + Script"}
+          {starting ? "Starting..." : "Generate Script"}
         </button>
       </div>
     );
@@ -143,13 +196,14 @@ export default function ClipScriptPanel({
 
   const allCompleted = clips.every((clip) => clip.status === "completed");
   const hasEditableClips = clips.some((clip) => clip.status === "draft" || clip.status === "failed");
+  const needsReferenceImage = clips.some((clip) => clip.role === "ugc");
 
   return (
     <div className="mt-3 flex flex-col gap-3">
       {error ? <FormError message={error} /> : null}
-      {!referenceImageReady ? (
+      {needsReferenceImage && !referenceImageReady ? (
         <p className="text-sm text-foreground/60">
-          Reference image is still generating -- check the Ads section below.
+          Model reference image is still generating -- check the Ads section below.
         </p>
       ) : null}
 
@@ -160,7 +214,9 @@ export default function ClipScriptPanel({
             className="rounded-md border border-black/10 p-3 dark:border-white/10"
           >
             <div className="flex items-center justify-between text-xs font-medium uppercase tracking-wide text-foreground/40">
-              <span>Clip {clip.clip_number}</span>
+              <span>
+                Clip {clip.clip_number} · {ROLE_LABELS[clip.role]}
+              </span>
               <span>{STATUS_LABELS[clip.status]}</span>
             </div>
             <textarea
@@ -176,6 +232,14 @@ export default function ClipScriptPanel({
             {clip.status === "completed" && clip.asset_url ? (
               <video src={clip.asset_url} controls className="mt-2 max-h-48 rounded-md" />
             ) : null}
+            {clip.role === "broll" && clip.preview_image_url && clip.status !== "completed" ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={clip.preview_image_url}
+                alt=""
+                className="mt-2 max-h-48 rounded-md object-cover"
+              />
+            ) : null}
             {clip.status === "failed" && clip.error ? (
               <p className="mt-1 text-xs text-red-500">{clip.error}</p>
             ) : null}
@@ -187,7 +251,7 @@ export default function ClipScriptPanel({
         <button
           type="button"
           onClick={handleGenerateAll}
-          disabled={generating || !referenceImageReady}
+          disabled={generating || (needsReferenceImage && !referenceImageReady)}
           className="self-start rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background disabled:opacity-50"
         >
           {generating ? "Generating clips..." : "Approve & Generate Clips"}

@@ -17,13 +17,65 @@ export default function CampaignForm({
   campaign,
   existingImages,
   submitLabel,
+  mode = "edit",
 }: {
   action: (prevState: ActionState, formData: FormData) => Promise<ActionState>;
   campaign?: Campaign;
   existingImages?: ExistingImage[];
   submitLabel: string;
+  // "create" shows just Name, Description, and a Product Image upload --
+  // everything else is still a real column, editable later from here.
+  mode?: "create" | "edit";
 }) {
   const [state, formAction, pending] = useActionState(action, null);
+
+  const productImageField = (
+    <>
+      {campaign?.product_image_url ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={campaign.product_image_url}
+          alt=""
+          className="h-24 w-24 rounded object-cover"
+        />
+      ) : null}
+      <FormField label={campaign?.product_image_url ? "Replace Product Image" : "Product Image (optional)"}>
+        <input type="file" name="product_image" accept="image/*" className={inputClass} />
+      </FormField>
+    </>
+  );
+
+  if (mode === "create") {
+    return (
+      <form action={formAction} className="mt-6 flex flex-col gap-4">
+        {state?.error ? <FormError message={state.error} /> : null}
+
+        <FormField label="Campaign / Product">
+          <input
+            name="name"
+            required
+            defaultValue={campaign?.name}
+            placeholder="e.g. CBD, Diet Pill, Male Enhancement"
+            className={inputClass}
+          />
+        </FormField>
+
+        <FormField label="Description (optional)">
+          <textarea
+            name="description"
+            rows={2}
+            defaultValue={campaign?.description ?? ""}
+            placeholder="e.g. Sports related, aggressive, medical oriented"
+            className={inputClass}
+          />
+        </FormField>
+
+        {productImageField}
+
+        <SubmitButton pending={pending} label={submitLabel} />
+      </form>
+    );
+  }
 
   return (
     <form action={formAction} className="mt-6 flex flex-col gap-4">
@@ -41,6 +93,8 @@ export default function CampaignForm({
           className={inputClass}
         />
       </FormField>
+
+      {productImageField}
 
       <FormField label="Brand Voice">
         <textarea

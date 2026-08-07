@@ -344,3 +344,15 @@ alter table ad_clips enable row level security;
 -- poller knows to finalize into ad_clips instead of creating a new Ad (which
 -- is what happens for every other generation_jobs row).
 alter table generation_jobs add column if not exists clip_id uuid references ad_clips (id) on delete cascade;
+
+-- Creative Engine — Phase 9 schema addition (product reference photo, per-clip
+-- UGC/B-roll role). `product_image_url` is an optional real photo of the
+-- actual product, passed as a reference image to Higgsfield so generated ads
+-- show the real product instead of an invented one. `ad_clips.role`
+-- determines how that clip is generated: 'ugc' clips animate from the shared
+-- model-consistency image (fal), 'broll' clips get their own fresh scene
+-- image (Higgsfield, also using the product photo as reference) before being
+-- animated -- `preview_image_url` holds that generated still for display.
+alter table campaigns add column if not exists product_image_url text;
+alter table ad_clips add column if not exists role text not null default 'ugc';
+alter table ad_clips add column if not exists preview_image_url text;

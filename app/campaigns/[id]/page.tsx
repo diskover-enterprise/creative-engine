@@ -74,6 +74,20 @@ export default async function CampaignDetailPage({
         </div>
       </div>
 
+      {campaign.product_image_url ? (
+        <div className="mt-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-foreground/40">
+            Product Image
+          </p>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={campaign.product_image_url}
+            alt=""
+            className="mt-1 h-32 w-32 rounded-lg object-cover"
+          />
+        </div>
+      ) : null}
+
       {images.length > 0 && (
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
           {images.map((image) => (

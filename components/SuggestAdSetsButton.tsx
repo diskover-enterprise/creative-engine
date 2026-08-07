@@ -6,23 +6,26 @@ import { FormError } from "@/components/FormStatus";
 import { suggestAdSetsForCampaign } from "@/app/campaigns/actions";
 import { saveSuggestedAdSets } from "@/app/ad-sets/actions";
 import type { AdSetSuggestion } from "@/lib/anthropic";
+import type { AdSetFormat } from "@/types";
 
 type Phase = "idle" | "loading" | "previewing" | "saving" | "failed";
 
 export default function SuggestAdSetsButton({ campaignId }: { campaignId: string }) {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>("idle");
+  const [format, setFormat] = useState<AdSetFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<AdSetSuggestion[]>([]);
   const [selected, setSelected] = useState<boolean[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
 
-  async function handleSuggest() {
+  async function handleSuggest(chosenFormat: AdSetFormat) {
     setError(null);
     setSummary(null);
+    setFormat(chosenFormat);
     setPhase("loading");
 
-    const result = await suggestAdSetsForCampaign(campaignId);
+    const result = await suggestAdSetsForCampaign(campaignId, chosenFormat);
     if ("error" in result) {
       setError(result.error);
       setPhase("failed");
@@ -35,11 +38,12 @@ export default function SuggestAdSetsButton({ campaignId }: { campaignId: string
   }
 
   async function handleSave() {
+    if (!format) return;
     setPhase("saving");
     setError(null);
 
     const chosen = suggestions.filter((_, index) => selected[index]);
-    const result = await saveSuggestedAdSets(campaignId, chosen);
+    const result = await saveSuggestedAdSets(campaignId, format, chosen);
     if ("error" in result) {
       setError(result.error);
       setPhase("previewing");
@@ -47,15 +51,19 @@ export default function SuggestAdSetsButton({ campaignId }: { campaignId: string
     }
 
     setSummary(
-      `Created ${result.adSetsCreated} ad set(s) and started producing ${result.generationsStarted} of them. Image ad sets will finish shortly; video ad sets get a reference image and a 5-clip script to review below.`
+      format === "video"
+        ? `Created ${result.adSetsCreated} ad set(s). Open each one below to choose clip count and UGC/B-roll roles before generating.`
+        : `Created ${result.adSetsCreated} ad set(s) and started producing ${result.generationsStarted} of them.`
     );
     setSuggestions([]);
+    setFormat(null);
     setPhase("idle");
     router.refresh();
   }
 
   function handleCancel() {
     setSuggestions([]);
+    setFormat(null);
     setError(null);
     setPhase("idle");
   }
@@ -69,7 +77,9 @@ export default function SuggestAdSetsButton({ campaignId }: { campaignId: string
 
     return (
       <div className="flex flex-col gap-3 rounded-lg border border-black/10 p-4 dark:border-white/10">
-        <p className="text-sm font-medium">Review suggested ad sets</p>
+        <p className="text-sm font-medium">
+          Review suggested {format === "video" ? "video" : "image"} ad sets
+        </p>
         {error ? <FormError message={error} /> : null}
 
         {suggestions.map((suggestion, index) => (
@@ -92,10 +102,7 @@ export default function SuggestAdSetsButton({ campaignId }: { campaignId: string
               <p className="text-xs text-foreground/50">
                 CTA: {suggestion.call_to_action}
               </p>
-              <p className="text-xs text-foreground/50">
-                {suggestion.format === "video" ? "Video" : "Static Image"},{" "}
-                {suggestion.aspect_ratio}
-              </p>
+              <p className="text-xs text-foreground/50">{suggestion.aspect_ratio}</p>
             </div>
           </label>
         ))}
@@ -130,14 +137,26 @@ export default function SuggestAdSetsButton({ campaignId }: { campaignId: string
           {summary}
         </p>
       ) : null}
-      <button
-        type="button"
-        onClick={handleSuggest}
-        disabled={phase === "loading"}
-        className="rounded-md border border-black/15 px-4 py-2 text-sm font-medium dark:border-white/15 disabled:opacity-50"
-      >
-        {phase === "loading" ? "Generating suggestions..." : "Suggest Ad Sets (AI)"}
-      </button>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => handleSuggest("static_image")}
+          disabled={phase === "loading"}
+          className="rounded-md border border-black/15 px-4 py-2 text-sm font-medium dark:border-white/15 disabled:opacity-50"
+        >
+          {phase === "loading" && format === "static_image"
+            ? "Generating..."
+            : "Generate Image Ad Concepts"}
+        </button>
+        <button
+          type="button"
+          onClick={() => handleSuggest("video")}
+          disabled={phase === "loading"}
+          className="rounded-md border border-black/15 px-4 py-2 text-sm font-medium dark:border-white/15 disabled:opacity-50"
+        >
+          {phase === "loading" && format === "video" ? "Generating..." : "Generate Video Ad Concepts"}
+        </button>
+      </div>
     </div>
   );
 }

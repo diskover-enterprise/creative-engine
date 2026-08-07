@@ -4,8 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getStoragePathFromPublicUrl } from "@/lib/supabase/storage";
-import { submitImageGeneration } from "@/lib/fal";
-import { submitVideoGeneration } from "@/lib/higgsfield";
+import { submitHiggsfieldImageGeneration, submitVideoGeneration } from "@/lib/higgsfield";
 import type { AdStatus, AdType } from "@/types";
 
 export type ActionState = { error: string } | null;
@@ -49,9 +48,11 @@ async function uploadAsset(
   return publicUrl;
 }
 
-// Enqueues a fal.ai generation job and returns immediately -- it does NOT
+// Enqueues a Higgsfield generation job and returns immediately -- it does NOT
 // wait for the image. GET /api/generation-jobs/[id] is polled by the client
-// to check progress and finalize the Ad once fal.ai is done.
+// to check progress and finalize the Ad once Higgsfield is done. Uses the
+// Campaign's product photo as a reference when set, so the real product
+// shows up instead of Higgsfield inventing one.
 export async function startImageGeneration(
   adSetId: string
 ): Promise<{ error: string } | { jobId: string }> {
@@ -59,7 +60,7 @@ export async function startImageGeneration(
 
   const { data: adSet } = await supabase
     .from("ad_sets")
-    .select("generated_prompt, aspect_ratio")
+    .select("generated_prompt, aspect_ratio, campaign_id")
     .eq("id", adSetId)
     .single();
 
@@ -67,9 +68,19 @@ export async function startImageGeneration(
     return { error: "This ad set has no generated prompt yet. Save the ad set first." };
   }
 
+  const { data: campaign } = await supabase
+    .from("campaigns")
+    .select("product_image_url")
+    .eq("id", adSet.campaign_id)
+    .single();
+
   let requestId: string;
   try {
-    requestId = await submitImageGeneration(adSet.generated_prompt, adSet.aspect_ratio);
+    requestId = await submitHiggsfieldImageGeneration(
+      adSet.generated_prompt,
+      adSet.aspect_ratio,
+      campaign?.product_image_url ?? undefined
+    );
   } catch (err) {
     return { error: err instanceof Error ? err.message : "Failed to start image generation." };
   }
@@ -78,7 +89,7 @@ export async function startImageGeneration(
     .from("generation_jobs")
     .insert({
       ad_set_id: adSetId,
-      provider: "fal-ai",
+      provider: "higgsfield-image",
       external_request_id: requestId,
       status: "processing",
       prompt: adSet.generated_prompt,

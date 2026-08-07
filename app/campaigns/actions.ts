@@ -6,9 +6,8 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getStoragePathFromPublicUrl } from "@/lib/supabase/storage";
 import { suggestAdSets, type AdSetSuggestion } from "@/lib/anthropic";
 import { buildAdSetPrompt } from "@/lib/promptTemplate";
-import { submitImageGeneration } from "@/lib/fal";
-import { startVideoAdSetGeneration } from "@/app/ad-sets/actions";
-import type { CampaignStatus } from "@/types";
+import { submitHiggsfieldImageGeneration } from "@/lib/higgsfield";
+import type { CampaignStatus, AdSetFormat } from "@/types";
 
 export type ActionState = { error: string } | null;
 
@@ -35,6 +34,10 @@ function validLandingPageUrl(formData: FormData): { value: string | null } | { e
   }
 }
 
+// Only Name + Description are on the create form now -- everything else
+// (brand voice, audience, offer, scheduling, auto_generate, ...) is still a
+// real column you can fill in later from the Edit page, just not required
+// up front.
 function fieldsFromForm(formData: FormData) {
   return {
     name: textOrNull(formData, "name"),
@@ -70,6 +73,32 @@ async function uploadLogo(
   const {
     data: { publicUrl },
   } = supabase.storage.from("brand-logos").getPublicUrl(path);
+
+  return publicUrl;
+}
+
+// The product photo passed to Higgsfield as a reference so generated ads
+// show the real product instead of an invented one. Stored in the same
+// bucket as gallery campaign images, just referenced by its own column
+// (campaigns.product_image_url) rather than a campaign_images row, since
+// it's used as generation input, not a gallery photo.
+async function uploadProductImage(
+  supabase: ReturnType<typeof getSupabaseServerClient>,
+  campaignId: string,
+  image: File
+) {
+  const path = `${campaignId}/product-reference-${Date.now()}-${image.name}`;
+  const { error } = await supabase.storage
+    .from("product-images")
+    .upload(path, image, { contentType: image.type });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const {
+    data: { publicUrl },
+  } = supabase.storage.from("product-images").getPublicUrl(path);
 
   return publicUrl;
 }
@@ -141,6 +170,16 @@ export async function createCampaign(
     }
   }
 
+  const productImage = formData.get("product_image");
+  if (productImage instanceof File && productImage.size > 0) {
+    try {
+      const productImageUrl = await uploadProductImage(supabase, campaign.id, productImage);
+      await supabase.from("campaigns").update({ product_image_url: productImageUrl }).eq("id", campaign.id);
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : "Failed to upload product image." };
+    }
+  }
+
   const images = formData
     .getAll("images")
     .filter((entry): entry is File => entry instanceof File && entry.size > 0);
@@ -176,7 +215,7 @@ export async function updateCampaign(
 
   const { data: existing } = await supabase
     .from("campaigns")
-    .select("logo_url")
+    .select("logo_url, product_image_url")
     .eq("id", campaignId)
     .single();
 
@@ -197,6 +236,21 @@ export async function updateCampaign(
       }
     } catch (err) {
       return { error: err instanceof Error ? err.message : "Failed to upload logo." };
+    }
+  }
+
+  const productImage = formData.get("product_image");
+  if (productImage instanceof File && productImage.size > 0) {
+    try {
+      updates.product_image_url = await uploadProductImage(supabase, campaignId, productImage);
+      if (existing?.product_image_url) {
+        const oldPath = getStoragePathFromPublicUrl(existing.product_image_url, "product-images");
+        if (oldPath) {
+          await supabase.storage.from("product-images").remove([oldPath]);
+        }
+      }
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : "Failed to upload product image." };
     }
   }
 
@@ -231,17 +285,19 @@ export async function updateCampaign(
   redirect(`/campaigns/${campaignId}`);
 }
 
-// Proposes 3 draft Ad Sets for this Campaign using Claude -- these are NOT
-// saved. The caller (a client component) shows them as a preview and only
-// persists the ones the user picks, via saveSuggestedAdSets.
+// Proposes 10 draft Ad Sets for this Campaign using Claude, all in the given
+// format (Image vs Video is chosen once for the whole batch) -- these are
+// NOT saved. The caller (a client component) shows them as a preview and
+// only persists the ones the user picks, via saveSuggestedAdSets.
 export async function suggestAdSetsForCampaign(
-  campaignId: string
+  campaignId: string,
+  format: AdSetFormat
 ): Promise<{ error: string } | { suggestions: AdSetSuggestion[] }> {
   const supabase = getSupabaseServerClient();
 
   const { data: campaign } = await supabase
     .from("campaigns")
-    .select("name, description, brand_voice, visual_style, audience, benefits, offer, objective")
+    .select("name, description, brand_voice, visual_style, audience, benefits, offer, objective, product_image_url")
     .eq("id", campaignId)
     .single();
 
@@ -250,7 +306,11 @@ export async function suggestAdSetsForCampaign(
   }
 
   try {
-    const suggestions = await suggestAdSets({ campaign });
+    const suggestions = await suggestAdSets({
+      campaign,
+      format,
+      hasProductImage: Boolean(campaign.product_image_url),
+    });
     return { suggestions };
   } catch (err) {
     return { error: err instanceof Error ? err.message : "Failed to generate suggestions." };
@@ -266,13 +326,11 @@ function startOfTodayUTC() {
 }
 
 // The automated pipeline for a Campaign marked auto_generate: asks Claude for
-// ad set directions and saves all of them (no human preview step -- that's
-// the point of automation), then starts production for as many as the
-// remaining daily budget allows. Image picks get their fal.ai image started
-// directly; video picks get a reference image plus their 5-clip script
-// written (via startVideoAdSetGeneration) -- clip generation itself always
-// stays a manual "Approve & Generate Clips" step, since that's real spend
-// with no review checkpoint otherwise.
+// static_image ad set directions and saves all of them (no human preview
+// step -- that's the point of automation), then starts a Higgsfield image
+// for as many as the remaining daily budget allows. Automation always uses
+// static_image -- the video pipeline needs a human to choose clip count and
+// UGC/B-roll roles, which doesn't fit an unattended run.
 export async function runAutomatedGeneration(
   campaignId: string
 ): Promise<{ error: string } | { adSetsCreated: number; generationsStarted: number }> {
@@ -281,7 +339,7 @@ export async function runAutomatedGeneration(
   const { data: campaign } = await supabase
     .from("campaigns")
     .select(
-      "name, description, brand_voice, visual_style, audience, benefits, offer, objective, auto_generate"
+      "name, description, brand_voice, visual_style, audience, benefits, offer, objective, auto_generate, product_image_url"
     )
     .eq("id", campaignId)
     .single();
@@ -308,13 +366,22 @@ export async function runAutomatedGeneration(
 
   let suggestions;
   try {
-    suggestions = await suggestAdSets({ campaign });
+    suggestions = await suggestAdSets({
+      campaign,
+      format: "static_image",
+      hasProductImage: Boolean(campaign.product_image_url),
+    });
   } catch (err) {
     return { error: err instanceof Error ? err.message : "Failed to generate ad set suggestions." };
   }
 
   const adSetRows = suggestions.map((suggestion) => {
-    const fields = { ...suggestion, visual_style_override: null, tone_override: null };
+    const fields = {
+      ...suggestion,
+      format: "static_image" as AdSetFormat,
+      visual_style_override: null,
+      tone_override: null,
+    };
     return {
       campaign_id: campaignId,
       ...fields,
@@ -325,7 +392,7 @@ export async function runAutomatedGeneration(
   const { data: savedAdSets, error: insertError } = await supabase
     .from("ad_sets")
     .insert(adSetRows)
-    .select("id, format, aspect_ratio, generated_prompt");
+    .select("id, aspect_ratio, generated_prompt");
 
   if (insertError || !savedAdSets) {
     return { error: insertError?.message ?? "Failed to save generated ad sets." };
@@ -337,17 +404,15 @@ export async function runAutomatedGeneration(
   for (const adSet of toGenerate) {
     if (!adSet.generated_prompt) continue;
 
-    if (adSet.format === "video") {
-      const result = await startVideoAdSetGeneration(adSet.id, "automated");
-      if (!("error" in result)) generationsStarted += 1;
-      continue;
-    }
-
     try {
-      const requestId = await submitImageGeneration(adSet.generated_prompt, adSet.aspect_ratio);
+      const requestId = await submitHiggsfieldImageGeneration(
+        adSet.generated_prompt,
+        adSet.aspect_ratio,
+        campaign.product_image_url ?? undefined
+      );
       await supabase.from("generation_jobs").insert({
         ad_set_id: adSet.id,
-        provider: "fal-ai",
+        provider: "higgsfield-image",
         external_request_id: requestId,
         status: "processing",
         prompt: adSet.generated_prompt,
@@ -392,7 +457,7 @@ export async function deleteCampaign(campaignId: string) {
 
   const { data: campaign } = await supabase
     .from("campaigns")
-    .select("logo_url")
+    .select("logo_url, product_image_url")
     .eq("id", campaignId)
     .single();
 
@@ -413,6 +478,13 @@ export async function deleteCampaign(campaignId: string) {
     const logoPath = getStoragePathFromPublicUrl(campaign.logo_url, "brand-logos");
     if (logoPath) {
       await supabase.storage.from("brand-logos").remove([logoPath]);
+    }
+  }
+
+  if (campaign?.product_image_url) {
+    const productImagePath = getStoragePathFromPublicUrl(campaign.product_image_url, "product-images");
+    if (productImagePath) {
+      await supabase.storage.from("product-images").remove([productImagePath]);
     }
   }
 

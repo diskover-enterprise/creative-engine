@@ -6,10 +6,14 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getStoragePathFromPublicUrl } from "@/lib/supabase/storage";
 import { buildAdSetPrompt } from "@/lib/promptTemplate";
 import { submitImageGeneration } from "@/lib/fal";
-import { submitVideoGeneration } from "@/lib/higgsfield";
+import {
+  submitVideoGeneration,
+  submitHiggsfieldImageGeneration,
+  getHiggsfieldImageGenerationStatus,
+} from "@/lib/higgsfield";
 import { submitStitch } from "@/lib/shotstack";
 import { generateClipScript } from "@/lib/anthropic";
-import type { AdSetFormat } from "@/types";
+import type { AdSetFormat, AdClipRole } from "@/types";
 import type { AdSetSuggestion } from "@/lib/anthropic";
 
 export type ActionState = { error: string } | null;
@@ -49,13 +53,50 @@ async function getPromptContext(
 ) {
   const { data: campaign } = await supabase
     .from("campaigns")
-    .select("name, description, brand_voice, visual_style, audience, benefits, offer, objective")
+    .select(
+      "name, description, brand_voice, visual_style, audience, benefits, offer, objective, product_image_url"
+    )
     .eq("id", campaignId)
     .single();
 
   if (!campaign) return null;
 
   return campaign;
+}
+
+// Submits a Higgsfield image generation and waits for it synchronously --
+// used for a B-roll clip's own scene image, which needs to exist before that
+// clip's video generation can be submitted. Higgsfield images typically
+// finish in a few seconds, so a short poll loop here (rather than a second
+// async generation_jobs row) keeps the "one clip = one video job" model
+// simple.
+async function generateImageAndWait(
+  prompt: string,
+  aspectRatio: string,
+  referenceImageUrl?: string,
+  maxWaitMs = 45000
+): Promise<string> {
+  const requestId = await submitHiggsfieldImageGeneration(prompt, aspectRatio, referenceImageUrl);
+  const start = Date.now();
+
+  while (Date.now() - start < maxWaitMs) {
+    const status = await getHiggsfieldImageGenerationStatus(requestId);
+    const imageUrl = status.images?.[0]?.url;
+
+    if (status.status === "completed" && imageUrl) {
+      return imageUrl;
+    }
+    if (status.status === "failed" || status.status === "nsfw") {
+      throw new Error(
+        status.status === "nsfw"
+          ? "Higgsfield flagged the B-roll scene image as NSFW."
+          : "Failed to generate the B-roll scene image."
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+
+  throw new Error("Timed out waiting for the B-roll scene image to generate.");
 }
 
 export async function createAdSet(
@@ -137,20 +178,26 @@ export async function updateAdSet(
   redirect(`/ad-sets/${adSetId}`);
 }
 
-// Starts the video pipeline for a video-format Ad Set: a reference image
-// (fal.ai, same path a static_image Ad Set uses) plus a 5-clip UGC script
-// (Claude), written immediately since the script is text-only and doesn't
-// need the reference image to finish first. Clips are NOT generated yet --
-// that only happens once the script is reviewed (see generateAllClips).
+// Starts the video pipeline for a video-format Ad Set once the user has
+// chosen how many clips and each one's UGC/B-roll role: a model-consistency
+// reference image (fal.ai -- a fictional on-camera creator, not the product
+// itself) only if at least one clip is UGC, plus the script (Claude),
+// written immediately since it's text-only and doesn't need the reference
+// image to finish first. Clips are NOT generated yet -- that only happens
+// once the script is reviewed (see generateAllClips).
 // Idempotent on the reference image specifically: if one is already done or
-// already in flight (e.g. this ad set went through the automated pipeline,
-// which only starts the image and never wrote a script), this just writes
-// the missing script instead of starting a second, duplicate image.
+// already in flight (e.g. a retry), this just (re)writes the script instead
+// of starting a second, duplicate image.
 export async function startVideoAdSetGeneration(
   adSetId: string,
+  roles: AdClipRole[],
   triggeredBy: "manual" | "automated" = "manual"
 ): Promise<{ error: string } | { referenceJobId: string | null; clipsCreated: number }> {
   const supabase = getSupabaseServerClient();
+
+  if (roles.length === 0) {
+    return { error: "Choose at least one clip." };
+  }
 
   const { data: adSet } = await supabase
     .from("ad_sets")
@@ -177,55 +224,60 @@ export async function startVideoAdSetGeneration(
   const campaign = await getPromptContext(supabase, adSet.campaign_id);
   if (!campaign) return { error: "Could not find the parent campaign." };
 
-  const [{ data: existingReferenceAd }, { data: existingReferenceJob }] = await Promise.all([
-    supabase
-      .from("ads")
-      .select("id")
-      .eq("ad_set_id", adSetId)
-      .eq("label", "Reference Image")
-      .maybeSingle(),
-    supabase
-      .from("generation_jobs")
-      .select("id")
-      .eq("ad_set_id", adSetId)
-      .eq("provider", "fal-ai")
-      .eq("status", "processing")
-      .is("clip_id", null)
-      .maybeSingle(),
-  ]);
+  const needsModelImage = roles.some((role) => role === "ugc");
+  let referenceJobId: string | null = null;
 
-  let referenceJobId: string | null = existingReferenceJob?.id ?? null;
-
-  if (!existingReferenceAd && !existingReferenceJob) {
-    try {
-      const requestId = await submitImageGeneration(adSet.generated_prompt, adSet.aspect_ratio);
-      const { data: job, error } = await supabase
-        .from("generation_jobs")
-        .insert({
-          ad_set_id: adSetId,
-          provider: "fal-ai",
-          external_request_id: requestId,
-          status: "processing",
-          prompt: adSet.generated_prompt,
-          triggered_by: triggeredBy,
-        })
+  if (needsModelImage) {
+    const [{ data: existingReferenceAd }, { data: existingReferenceJob }] = await Promise.all([
+      supabase
+        .from("ads")
         .select("id")
-        .single();
+        .eq("ad_set_id", adSetId)
+        .eq("label", "Reference Image")
+        .maybeSingle(),
+      supabase
+        .from("generation_jobs")
+        .select("id")
+        .eq("ad_set_id", adSetId)
+        .eq("provider", "fal-ai")
+        .eq("status", "processing")
+        .is("clip_id", null)
+        .maybeSingle(),
+    ]);
 
-      if (error || !job) {
-        return { error: error?.message ?? "Failed to record the reference image job." };
+    referenceJobId = existingReferenceJob?.id ?? null;
+
+    if (!existingReferenceAd && !existingReferenceJob) {
+      try {
+        const requestId = await submitImageGeneration(adSet.generated_prompt, adSet.aspect_ratio);
+        const { data: job, error } = await supabase
+          .from("generation_jobs")
+          .insert({
+            ad_set_id: adSetId,
+            provider: "fal-ai",
+            external_request_id: requestId,
+            status: "processing",
+            prompt: adSet.generated_prompt,
+            triggered_by: triggeredBy,
+          })
+          .select("id")
+          .single();
+
+        if (error || !job) {
+          return { error: error?.message ?? "Failed to record the reference image job." };
+        }
+        referenceJobId = job.id;
+      } catch (err) {
+        return {
+          error: err instanceof Error ? err.message : "Failed to start the reference image generation.",
+        };
       }
-      referenceJobId = job.id;
-    } catch (err) {
-      return {
-        error: err instanceof Error ? err.message : "Failed to start the reference image generation.",
-      };
     }
   }
 
   let script;
   try {
-    script = await generateClipScript({ campaign, adSet });
+    script = await generateClipScript({ campaign, adSet, roles });
   } catch (err) {
     return { error: err instanceof Error ? err.message : "Failed to write the clip script." };
   }
@@ -234,6 +286,7 @@ export async function startVideoAdSetGeneration(
     ad_set_id: adSetId,
     clip_number: index + 1,
     script: clip.description,
+    role: roles[index],
     status: "draft",
   }));
 
@@ -265,28 +318,26 @@ export async function updateAdClipScript(clipId: string, script: string): Promis
 }
 
 // Generates (or retries) every draft/failed clip for a video Ad Set, once
-// the script has been reviewed. Requires the reference image to have
-// finished first, since every clip is generated from it.
+// the script has been reviewed. A 'ugc' clip animates from the shared
+// model-consistency reference image (must already be done). A 'broll' clip
+// gets its own fresh scene image first (Higgsfield, using the Campaign's
+// product photo as a reference when set) before being animated.
 export async function generateAllClips(
   adSetId: string
 ): Promise<{ error: string } | { jobIds: string[] }> {
   const supabase = getSupabaseServerClient();
 
-  const { data: referenceAd } = await supabase
-    .from("ads")
-    .select("asset_url")
-    .eq("ad_set_id", adSetId)
-    .eq("label", "Reference Image")
-    .not("asset_url", "is", null)
-    .maybeSingle();
+  const { data: adSet } = await supabase
+    .from("ad_sets")
+    .select("campaign_id, aspect_ratio")
+    .eq("id", adSetId)
+    .single();
 
-  if (!referenceAd?.asset_url) {
-    return { error: "The reference image hasn't finished generating yet." };
-  }
+  if (!adSet) return { error: "Ad set not found." };
 
   const { data: clips } = await supabase
     .from("ad_clips")
-    .select("id, script, status")
+    .select("id, script, status, role")
     .eq("ad_set_id", adSetId)
     .order("clip_number", { ascending: true });
 
@@ -298,10 +349,46 @@ export async function generateAllClips(
     return { error: "No clips left to generate." };
   }
 
+  let modelImageUrl: string | null = null;
+  if (pendingClips.some((clip) => clip.role === "ugc")) {
+    const { data: referenceAd } = await supabase
+      .from("ads")
+      .select("asset_url")
+      .eq("ad_set_id", adSetId)
+      .eq("label", "Reference Image")
+      .not("asset_url", "is", null)
+      .maybeSingle();
+
+    if (!referenceAd?.asset_url) {
+      return { error: "The model reference image hasn't finished generating yet." };
+    }
+    modelImageUrl = referenceAd.asset_url;
+  }
+
+  const { data: campaign } = await supabase
+    .from("campaigns")
+    .select("product_image_url")
+    .eq("id", adSet.campaign_id)
+    .single();
+
   const jobIds: string[] = [];
   for (const clip of pendingClips) {
     try {
-      const requestId = await submitVideoGeneration(referenceAd.asset_url, clip.script);
+      let sourceImageUrl: string;
+      let previewImageUrl: string | null = null;
+
+      if (clip.role === "ugc") {
+        sourceImageUrl = modelImageUrl!;
+      } else {
+        sourceImageUrl = await generateImageAndWait(
+          clip.script,
+          adSet.aspect_ratio,
+          campaign?.product_image_url ?? undefined
+        );
+        previewImageUrl = sourceImageUrl;
+      }
+
+      const requestId = await submitVideoGeneration(sourceImageUrl, clip.script);
       const { data: job, error } = await supabase
         .from("generation_jobs")
         .insert({
@@ -316,7 +403,10 @@ export async function generateAllClips(
         .single();
 
       if (error || !job) continue;
-      await supabase.from("ad_clips").update({ status: "processing" }).eq("id", clip.id);
+      await supabase
+        .from("ad_clips")
+        .update({ status: "processing", preview_image_url: previewImageUrl })
+        .eq("id", clip.id);
       jobIds.push(job.id);
     } catch {
       // Leave this clip in draft/failed -- it can be retried individually later.
@@ -331,7 +421,7 @@ export async function generateAllClips(
   return { jobIds };
 }
 
-// Stitches the 5 completed clips into one final video Ad via Shotstack.
+// Stitches the completed clips into one final video Ad via Shotstack.
 export async function stitchAdClips(
   adSetId: string
 ): Promise<{ error: string } | { jobId: string }> {
@@ -381,12 +471,14 @@ export async function stitchAdClips(
 }
 
 // Persists the AI-suggested ad sets the user chose to keep in the preview
-// UI, and immediately starts producing the finished ad for each one: an
-// image generation for static_image picks, or a reference image + 5-clip
-// script for video picks. Nothing from suggestAdSetsForCampaign() is ever
-// written to the database until this runs.
+// UI. Image picks immediately start producing the finished ad (Higgsfield,
+// using the Campaign's product photo as a reference when set). Video picks
+// are just saved -- clip count/role setup and generation happen afterward on
+// the Ad Set page (see startVideoAdSetGeneration). Nothing from
+// suggestAdSetsForCampaign() is ever written to the database until this runs.
 export async function saveSuggestedAdSets(
   campaignId: string,
+  format: AdSetFormat,
   suggestions: AdSetSuggestion[]
 ): Promise<{ error: string } | { adSetsCreated: number; generationsStarted: number }> {
   if (suggestions.length === 0) {
@@ -403,7 +495,7 @@ export async function saveSuggestedAdSets(
     // AI suggestions inherit the campaign's voice/style rather than
     // overriding them, so these are always null here (same as leaving the
     // fields blank in the manual Ad Set form).
-    const fields = { ...suggestion, visual_style_override: null, tone_override: null };
+    const fields = { ...suggestion, format, visual_style_override: null, tone_override: null };
     return {
       campaign_id: campaignId,
       ...fields,
@@ -414,7 +506,7 @@ export async function saveSuggestedAdSets(
   const { data: savedAdSets, error } = await supabase
     .from("ad_sets")
     .insert(rows)
-    .select("id, format");
+    .select("id");
 
   if (error || !savedAdSets) {
     return { error: error?.message ?? "Failed to save ad sets." };
@@ -422,31 +514,29 @@ export async function saveSuggestedAdSets(
 
   let generationsStarted = 0;
 
-  for (let i = 0; i < savedAdSets.length; i++) {
-    const adSet = savedAdSets[i];
+  if (format === "static_image") {
+    for (let i = 0; i < savedAdSets.length; i++) {
+      const { generated_prompt: generatedPrompt, aspect_ratio: aspectRatio } = rows[i];
+      if (!generatedPrompt) continue;
 
-    if (adSet.format === "video") {
-      const result = await startVideoAdSetGeneration(adSet.id);
-      if (!("error" in result)) generationsStarted += 1;
-      continue;
-    }
-
-    const { generated_prompt: generatedPrompt, aspect_ratio: aspectRatio } = rows[i];
-    if (!generatedPrompt) continue;
-
-    try {
-      const requestId = await submitImageGeneration(generatedPrompt, aspectRatio);
-      await supabase.from("generation_jobs").insert({
-        ad_set_id: adSet.id,
-        provider: "fal-ai",
-        external_request_id: requestId,
-        status: "processing",
-        prompt: generatedPrompt,
-      });
-      generationsStarted += 1;
-    } catch {
-      // Leave this ad set without a generation started -- it can still be
-      // generated manually later from its own page.
+      try {
+        const requestId = await submitHiggsfieldImageGeneration(
+          generatedPrompt,
+          aspectRatio,
+          context.product_image_url ?? undefined
+        );
+        await supabase.from("generation_jobs").insert({
+          ad_set_id: savedAdSets[i].id,
+          provider: "higgsfield-image",
+          external_request_id: requestId,
+          status: "processing",
+          prompt: generatedPrompt,
+        });
+        generationsStarted += 1;
+      } catch {
+        // Leave this ad set without a generation started -- it can still be
+        // generated manually later from its own page.
+      }
     }
   }
 

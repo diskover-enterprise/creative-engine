@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
+import type { AdSetFormat, AdClipRole } from "@/types";
 
 const client = new Anthropic();
 
@@ -13,7 +14,6 @@ export const AdSetSuggestionSchema = z.object({
   setting_scene: z.string().describe("Where/how the product is shown"),
   key_message: z.string().describe("The single most important message to convey"),
   call_to_action: z.string().describe("Suggested call-to-action text"),
-  format: z.enum(["static_image", "video"]),
   aspect_ratio: z.enum(["1:1", "4:5", "9:16", "16:9"]),
 });
 
@@ -38,31 +38,41 @@ interface CampaignContext {
 
 interface SuggestionContext {
   campaign: CampaignContext;
+  format: AdSetFormat;
+  hasProductImage: boolean;
 }
 
 // Uses the Anthropic API purely for creative ideation (proposing distinct
 // campaign angles) -- the final generation prompt sent to fal.ai/Higgsfield
 // is still assembled deterministically by lib/promptTemplate.ts, not by this
-// model.
+// model. Only Name + optional Description usually exist for a Campaign now,
+// so Claude is expected to infer audience/tone/angles itself when the other
+// fields are blank rather than relying on them.
 export async function suggestAdSets(context: SuggestionContext) {
-  const { campaign } = context;
+  const { campaign, format, hasProductImage } = context;
 
   const prompt = `
-Campaign: ${campaign.name}
-Description: ${campaign.description ?? "not specified"}
-Brand voice: ${campaign.brand_voice ?? "not specified"}
+Product/Campaign: ${campaign.name}
+Description: ${campaign.description ?? "not specified -- infer a plausible, common use case for a product like this"}
+Brand voice: ${campaign.brand_voice ?? "not specified -- pick a tone that fits this kind of product"}
 Visual style: ${campaign.visual_style ?? "not specified"}
-Target audience: ${campaign.audience ?? "not specified"}
+Target audience: ${campaign.audience ?? "not specified -- infer a plausible target audience"}
 Benefits: ${campaign.benefits ?? "not specified"}
 Offer: ${campaign.offer ?? "not specified"}
 Objective: ${campaign.objective ?? "not specified"}
+A real product photo will${hasProductImage ? "" : " NOT"} be used as a visual reference for generation.
 `.trim();
+
+  const formatInstruction =
+    format === "video"
+      ? "Every one of these is for a VIDEO ad, so setting_scene should describe a scene with movement/action potential, not a static shot."
+      : "Every one of these is for a STATIC IMAGE ad, so setting_scene should describe one single freeze-frame moment.";
 
   const response = await client.messages.parse({
     model: "claude-opus-5",
     max_tokens: 4096,
     system:
-      `You are a creative strategist for digital advertising. Given brand and product context, propose exactly ${SUGGESTION_COUNT} distinct, actionable ad set directions for an ad campaign. Each ad set must take a genuinely different angle from the others (different emotion, different scenario, or different audience appeal) -- do not produce near-duplicates. Keep each field concise and concrete, ready to hand to a designer. Real footage of real people will often be mixed with AI-generated visuals, so favor authentic, lived-in, UGC-style settings and scenes over glossy, studio-perfect ones -- AI-generated output should not look conspicuously polished or synthetic.`,
+      `You are a creative strategist for digital advertising. Given a product/campaign name and whatever other context is provided, propose exactly ${SUGGESTION_COUNT} distinct, actionable ad set directions. ${formatInstruction} Each ad set must take a genuinely different angle from the others (different emotion, different scenario, or different audience appeal) -- do not produce near-duplicates. Write each field as a detailed, concrete master prompt fragment specific enough to hand directly to an image/video generation model -- not a vague summary. Real footage of real people will often be mixed with AI-generated visuals, so favor authentic, lived-in, UGC-style settings and scenes over glossy, studio-perfect ones -- AI-generated output should not look conspicuously polished or synthetic.`,
     messages: [{ role: "user", content: prompt }],
     output_config: { format: zodOutputFormat(AdSetSuggestionsResponseSchema) },
   });
@@ -108,9 +118,9 @@ export const AdCopySchema = z.object({
 export type AdCopy = z.infer<typeof AdCopySchema>;
 
 // Writes the headline + caption that turn a bare generated image into a
-// finished ad. Called once a fal.ai image completes for a static_image Ad
-// Set (see lib/generationPoll.ts) -- never for a video Ad Set's reference
-// image, which isn't meant to be shown as-is.
+// finished ad. Called once an image completes for a static_image Ad Set (see
+// lib/generationPoll.ts) -- never for a video Ad Set's reference image,
+// which isn't meant to be shown as-is.
 export async function generateAdCopy(context: {
   campaign: CampaignContext;
   adSet: AdSetContext;
@@ -133,38 +143,45 @@ export async function generateAdCopy(context: {
   return response.parsed_output;
 }
 
-export const ClipScriptSchema = z.object({
-  clips: z
-    .array(
-      z.object({
-        description: z
-          .string()
-          .describe(
-            "What happens in this ~5 second clip: the action, framing, and any on-camera line -- written as a direct instruction to a UGC creator/video model, not as prose narration"
-          ),
-      })
-    )
-    .length(5),
-});
-
-export type ClipScript = z.infer<typeof ClipScriptSchema>;
-
-// Writes a 5-clip UGC video script (~5 seconds per clip, ~25 seconds total)
-// for a video Ad Set. Generated up front from a reference image + this
-// script so the whole thing can be reviewed/edited before any per-clip
+// Writes a full-length video script (~5 seconds per clip) for a video Ad
+// Set, respecting a per-clip UGC/B-roll role assignment: a 'ugc' clip is
+// performed by the consistent on-camera model/creator, a 'broll' clip is a
+// product/scene shot with nobody on camera (a candidate for voiceover later,
+// since there's no on-camera dialogue). Generated up front from just the
+// role list so the whole thing can be reviewed/edited before any per-clip
 // Higgsfield generation is triggered (see lib/generationPoll.ts and
 // app/ad-sets/actions.ts).
 export async function generateClipScript(context: {
   campaign: CampaignContext;
   adSet: AdSetContext;
-}): Promise<ClipScript> {
-  const prompt = describeCampaignAndAdSet(context.campaign, context.adSet);
+  roles: AdClipRole[];
+}): Promise<{ clips: { description: string }[] }> {
+  const { roles } = context;
+  const prompt = `${describeCampaignAndAdSet(context.campaign, context.adSet)}
+
+Shot list (in order, ${roles.length} clips total, ~5 seconds each): ${roles
+    .map((role, index) => `Clip ${index + 1} = ${role === "ugc" ? "UGC (on-camera creator)" : "B-ROLL (no person)"}`)
+    .join(", ")}`;
+
+  const ClipScriptSchema = z.object({
+    clips: z
+      .array(
+        z.object({
+          description: z
+            .string()
+            .describe(
+              "What happens in this ~5 second clip: the action, framing, and any on-camera line -- written as a direct instruction to a UGC creator/video model, not as prose narration. A UGC clip shows the creator on camera (with dialogue if natural); a B-ROLL clip must not describe any person speaking or appearing on camera -- product/scene/hands only."
+            ),
+        })
+      )
+      .length(roles.length),
+  });
 
   const response = await client.messages.parse({
     model: "claude-opus-5",
     max_tokens: 2048,
     system:
-      "You are directing a UGC-style short vertical ad video, shot as 5 sequential handheld clips of about 5 seconds each (~25 seconds total) from one consistent reference image/scene. Write exactly 5 clip descriptions that tell a coherent, natural mini-story building toward the call to action -- each one a concrete instruction (setting, action, camera framing, any spoken line) a video generation model can follow. Favor authentic, lived-in, slightly imperfect handheld footage over polished studio production -- this will be mixed with real captured footage, so it must not read as obviously AI-generated or overly smooth.",
+      "You are directing a short vertical ad video, shot as a sequence of ~5 second clips from one consistent product/scene. You'll be given an ordered shot list marking each clip as UGC (the on-camera creator performs) or B-ROLL (no person -- product, hands, or scene only, since this may get a voiceover added later instead of on-camera dialogue). Write one clip description per shot-list entry, in order, telling a coherent, natural mini-story building toward the call to action -- each one a concrete instruction (setting, action, camera framing, any spoken line for UGC clips) a video generation model can follow. Favor authentic, lived-in, slightly imperfect handheld footage over polished studio production -- this will be mixed with real captured footage, so it must not read as obviously AI-generated or overly smooth.",
     messages: [{ role: "user", content: prompt }],
     output_config: { format: zodOutputFormat(ClipScriptSchema) },
   });

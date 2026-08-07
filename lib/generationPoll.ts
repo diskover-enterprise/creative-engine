@@ -1,7 +1,7 @@
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getStoragePathFromPublicUrl } from "@/lib/supabase/storage";
 import { getImageGenerationStatus, getImageGenerationResult } from "@/lib/fal";
-import { getVideoGenerationStatus } from "@/lib/higgsfield";
+import { getVideoGenerationStatus, getHiggsfieldImageGenerationStatus } from "@/lib/higgsfield";
 import { getStitchStatus } from "@/lib/shotstack";
 import { generateAdCopy } from "@/lib/anthropic";
 import type { GenerationJob } from "@/types";
@@ -109,6 +109,108 @@ async function pollFalJob(supabase: Supabase, job: GenerationJob): Promise<PollR
         type: "image",
         source: "ai_generated",
         provider: "fal-ai",
+        generation_prompt: job.prompt,
+        asset_url: publicUrl,
+        status: "draft",
+      })
+      .select("id")
+      .single();
+
+    if (insertError || !ad) {
+      const storagePath = getStoragePathFromPublicUrl(publicUrl, "creative-assets");
+      if (storagePath) {
+        await supabase.storage.from("creative-assets").remove([storagePath]);
+      }
+      throw new Error(insertError?.message ?? "Failed to save the generated ad.");
+    }
+
+    await supabase
+      .from("generation_jobs")
+      .update({ status: "completed", ad_id: ad.id })
+      .eq("id", job.id);
+
+    if (!isReferenceImage) {
+      await attachAdCopy(supabase, ad.id, job.ad_set_id);
+    }
+
+    return { status: "completed", adId: ad.id };
+  } catch (err) {
+    return markFailed(
+      supabase,
+      job,
+      err instanceof Error ? err.message : "Failed to finalize the generated ad."
+    );
+  }
+}
+
+// Image ads and B-roll clip preview images generated via Higgsfield's
+// text-to-image / reference-image models. Distinct provider string
+// ("higgsfield-image") from Higgsfield's video jobs ("higgsfield") since both
+// share the "higgsfield" name but return completely different result shapes.
+async function pollHiggsfieldImageJob(supabase: Supabase, job: GenerationJob): Promise<PollResult> {
+  let statusResponse: Awaited<ReturnType<typeof getHiggsfieldImageGenerationStatus>>;
+  try {
+    statusResponse = await getHiggsfieldImageGenerationStatus(job.external_request_id);
+  } catch (err) {
+    return markFailed(
+      supabase,
+      job,
+      err instanceof Error ? err.message : "Failed to check generation status."
+    );
+  }
+
+  if (statusResponse.status === "failed" || statusResponse.status === "nsfw") {
+    return markFailed(
+      supabase,
+      job,
+      statusResponse.status === "nsfw"
+        ? "Higgsfield flagged this generation as NSFW."
+        : "Higgsfield generation failed."
+    );
+  }
+
+  const imageUrl = statusResponse.images?.[0]?.url;
+  if (statusResponse.status !== "completed" || !imageUrl) {
+    return { status: "processing" };
+  }
+
+  try {
+    const imageResponse = await fetch(imageUrl);
+    if (!imageResponse.ok) {
+      throw new Error("Failed to download the generated image from Higgsfield.");
+    }
+    const imageBytes = new Uint8Array(await imageResponse.arrayBuffer());
+    const contentType = imageResponse.headers.get("content-type") ?? "image/png";
+    const extension = contentType.includes("png") ? "png" : "jpg";
+    const path = `${job.ad_set_id}/${Date.now()}-higgsfield-generated.${extension}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("creative-assets")
+      .upload(path, imageBytes, { contentType });
+
+    if (uploadError) {
+      throw new Error(uploadError.message);
+    }
+
+    const {
+      data: { publicUrl },
+    } = supabase.storage.from("creative-assets").getPublicUrl(path);
+
+    const { data: adSet } = await supabase
+      .from("ad_sets")
+      .select("format")
+      .eq("id", job.ad_set_id)
+      .single();
+    const isReferenceImage = adSet?.format === "video";
+
+    const { data: ad, error: insertError } = await supabase
+      .from("ads")
+      .insert({
+        ad_set_id: job.ad_set_id,
+        label: isReferenceImage ? "Reference Image" : null,
+        type: "image",
+        source: "ai_generated",
+        provider: "higgsfield",
         generation_prompt: job.prompt,
         asset_url: publicUrl,
         status: "draft",
@@ -341,6 +443,7 @@ export async function pollGenerationJob(supabase: Supabase, job: GenerationJob):
   }
 
   if (job.provider === "shotstack") return pollShotstackJob(supabase, job);
+  if (job.provider === "higgsfield-image") return pollHiggsfieldImageJob(supabase, job);
   if (job.provider === "higgsfield") return pollHiggsfieldJob(supabase, job);
   return pollFalJob(supabase, job);
 }

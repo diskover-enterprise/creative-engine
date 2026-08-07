@@ -20,6 +20,7 @@ export interface Campaign {
   start_date: string | null;
   end_date: string | null;
   notes: string | null;
+  product_image_url: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -75,17 +76,22 @@ export interface Ad {
 }
 
 export type AdClipStatus = "draft" | "processing" | "completed" | "failed";
+export type AdClipRole = "ugc" | "broll";
 
-// One scene of a 5-clip UGC video script for a video Ad Set. Written up
-// front (via lib/anthropic.ts generateClipScript) so the script can be
-// reviewed/edited before spending on Higgsfield generation for each clip.
+// One scene of a video Ad Set's script. Written up front (via
+// lib/anthropic.ts generateClipScript) so the script can be reviewed/edited
+// before spending on Higgsfield generation for each clip. A 'ugc' clip
+// animates from the Ad Set's shared model-consistency image; a 'broll' clip
+// gets its own fresh scene image (preview_image_url) generated just for it.
 export interface AdClip {
   id: string;
   ad_set_id: string;
   clip_number: number;
   script: string;
+  role: AdClipRole;
   status: AdClipStatus;
   asset_url: string | null;
+  preview_image_url: string | null;
   error: string | null;
   created_at: string;
   updated_at: string;
