@@ -70,7 +70,11 @@ A real product photo will${hasProductImage ? "" : " NOT"} be used as a visual re
 
   const response = await client.messages.parse({
     model: "claude-opus-5",
-    max_tokens: 4096,
+    // 10 suggestions x 6 detailed "master prompt fragment" fields routinely
+    // runs past 4096 tokens and gets cut off mid-string, which surfaces as a
+    // JSON parse error ("Unterminated string") rather than a token-limit
+    // error -- give it enough headroom to actually finish all 10.
+    max_tokens: 8192,
     system:
       `You are a creative strategist for digital advertising. Given a product/campaign name and whatever other context is provided, propose exactly ${SUGGESTION_COUNT} distinct, actionable ad set directions. ${formatInstruction} Each ad set must take a genuinely different angle from the others (different emotion, different scenario, or different audience appeal) -- do not produce near-duplicates. Write each field as a detailed, concrete master prompt fragment specific enough to hand directly to an image/video generation model -- not a vague summary. Real footage of real people will often be mixed with AI-generated visuals, so favor authentic, lived-in, UGC-style settings and scenes over glossy, studio-perfect ones -- AI-generated output should not look conspicuously polished or synthetic.`,
     messages: [{ role: "user", content: prompt }],
