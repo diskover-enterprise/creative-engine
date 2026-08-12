@@ -88,6 +88,15 @@ export default async function CampaignDetailPage({
         </div>
       ) : null}
 
+      {campaign.landing_page_summary ? (
+        <div className="mt-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-foreground/40">
+            Landing Page Analysis
+          </p>
+          <p className="mt-1 text-sm text-foreground/70">{campaign.landing_page_summary}</p>
+        </div>
+      ) : null}
+
       {images.length > 0 && (
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
           {images.map((image) => (

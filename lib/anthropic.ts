@@ -34,6 +34,7 @@ interface CampaignContext {
   benefits: string | null;
   offer: string | null;
   objective: string | null;
+  landing_page_summary?: string | null;
 }
 
 interface SuggestionContext {
@@ -60,6 +61,7 @@ Target audience: ${campaign.audience ?? "not specified -- infer a plausible targ
 Benefits: ${campaign.benefits ?? "not specified"}
 Offer: ${campaign.offer ?? "not specified"}
 Objective: ${campaign.objective ?? "not specified"}
+${campaign.landing_page_summary ? `Landing page insights: ${campaign.landing_page_summary}` : ""}
 A real product photo will${hasProductImage ? "" : " NOT"} be used as a visual reference for generation.
 `.trim();
 
@@ -105,7 +107,7 @@ Brand voice: ${adSet.tone_override ?? campaign.brand_voice ?? "not specified"}
 Visual style: ${adSet.visual_style_override ?? campaign.visual_style ?? "not specified"}
 Target audience: ${campaign.audience ?? "not specified"}
 Offer: ${campaign.offer ?? "not specified"}
-
+${campaign.landing_page_summary ? `Landing page insights: ${campaign.landing_page_summary}\n` : ""}
 Ad angle: ${adSet.messaging_angle ?? "not specified"}
 Target emotion: ${adSet.target_emotion ?? "not specified"}
 Setting/scene: ${adSet.setting_scene ?? "not specified"}
@@ -195,4 +197,34 @@ Shot list (in order, ${roles.length} clips total, ~5 seconds each): ${roles
   }
 
   return response.parsed_output;
+}
+
+const LandingPageAnalysisSchema = z.object({
+  analysis: z
+    .string()
+    .describe(
+      "A dense paragraph capturing what this product/offer actually is, its concrete benefits/selling points, who it's likely for, and any specific pricing/promo/offer mentioned -- written so it can be dropped directly into another prompt as ad-creation context."
+    ),
+});
+
+// Turns raw (tag-stripped) landing page text into a paragraph of
+// ad-creation context, stored on the campaign and folded into every
+// downstream Claude call (see CampaignContext.landing_page_summary above) so
+// concepts, copy, and video scripts are grounded in the real product instead
+// of Claude's own guesses.
+export async function analyzeLandingPage(pageText: string): Promise<string> {
+  const response = await client.messages.parse({
+    model: "claude-opus-5",
+    max_tokens: 1024,
+    system:
+      "You extract advertising-relevant information from raw landing page text (HTML tags already stripped, so layout/structure is lost -- just read the words). Identify what the product/offer actually is, its concrete benefits and selling points, who it's for, and any specific pricing/promo/offer mentioned. Ignore navigation boilerplate, cookie notices, and footer legal text.",
+    messages: [{ role: "user", content: `Landing page text:\n\n${pageText}` }],
+    output_config: { format: zodOutputFormat(LandingPageAnalysisSchema) },
+  });
+
+  if (!response.parsed_output) {
+    throw new Error("Claude did not return a parseable landing page analysis.");
+  }
+
+  return response.parsed_output.analysis;
 }

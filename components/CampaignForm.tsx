@@ -70,6 +70,19 @@ export default function CampaignForm({
           />
         </FormField>
 
+        <FormField label="Landing Page URL (optional)">
+          <input
+            type="url"
+            name="landing_page_url"
+            defaultValue={campaign?.landing_page_url ?? ""}
+            placeholder="https://example.com/offer"
+            className={inputClass}
+          />
+        </FormField>
+        <p className="-mt-3 text-xs text-foreground/50">
+          We&apos;ll analyze this page to pull product details and benefits into your ad concepts.
+        </p>
+
         {productImageField}
 
         <SubmitButton pending={pending} label={submitLabel} />

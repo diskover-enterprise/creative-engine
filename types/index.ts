@@ -11,6 +11,7 @@ export interface Campaign {
   visual_style: string | null;
   logo_url: string | null;
   landing_page_url: string | null;
+  landing_page_summary: string | null;
   audience: string | null;
   benefits: string | null;
   offer: string | null;

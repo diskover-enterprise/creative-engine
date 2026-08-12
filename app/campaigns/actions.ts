@@ -4,7 +4,8 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getStoragePathFromPublicUrl } from "@/lib/supabase/storage";
-import { suggestAdSets, type AdSetSuggestion } from "@/lib/anthropic";
+import { suggestAdSets, analyzeLandingPage, type AdSetSuggestion } from "@/lib/anthropic";
+import { fetchLandingPageText } from "@/lib/landingPage";
 import { buildAdSetPrompt } from "@/lib/promptTemplate";
 import { submitHiggsfieldImageGeneration } from "@/lib/higgsfield";
 import type { CampaignStatus, AdSetFormat } from "@/types";
@@ -31,6 +32,19 @@ function validLandingPageUrl(formData: FormData): { value: string | null } | { e
     return { value };
   } catch {
     return { error: "Landing page URL is not a valid URL." };
+  }
+}
+
+// Fetch + Claude analysis is best-effort: it's extra context for ad
+// concepts, not a required step, so a broken URL or an unreachable/JS-only
+// page should never block creating or saving a campaign.
+async function analyzeLandingPageBestEffort(url: string): Promise<string | null> {
+  try {
+    const pageText = await fetchLandingPageText(url);
+    return await analyzeLandingPage(pageText);
+  } catch (err) {
+    console.error(`Landing page analysis failed for ${url}:`, err);
+    return null;
   }
 }
 
@@ -148,11 +162,19 @@ export async function createCampaign(
     return { error: landingPage.error };
   }
 
+  const landingPageSummary = landingPage.value
+    ? await analyzeLandingPageBestEffort(landingPage.value)
+    : null;
+
   const supabase = getSupabaseServerClient();
 
   const { data: campaign, error } = await supabase
     .from("campaigns")
-    .insert({ ...fields, landing_page_url: landingPage.value })
+    .insert({
+      ...fields,
+      landing_page_url: landingPage.value,
+      landing_page_summary: landingPageSummary,
+    })
     .select()
     .single();
 
@@ -215,13 +237,23 @@ export async function updateCampaign(
 
   const { data: existing } = await supabase
     .from("campaigns")
-    .select("logo_url, product_image_url")
+    .select("logo_url, product_image_url, landing_page_url, landing_page_summary")
     .eq("id", campaignId)
     .single();
+
+  // Only re-fetch + re-analyze when the URL actually changed -- otherwise
+  // every unrelated edit-and-save would re-run it for no reason.
+  let landingPageSummary = existing?.landing_page_summary ?? null;
+  if (landingPage.value && landingPage.value !== existing?.landing_page_url) {
+    landingPageSummary = await analyzeLandingPageBestEffort(landingPage.value);
+  } else if (!landingPage.value) {
+    landingPageSummary = null;
+  }
 
   const updates: Record<string, string | boolean | null> = {
     ...fields,
     landing_page_url: landingPage.value,
+    landing_page_summary: landingPageSummary,
   };
 
   const logo = formData.get("logo");
@@ -297,7 +329,7 @@ export async function suggestAdSetsForCampaign(
 
   const { data: campaign } = await supabase
     .from("campaigns")
-    .select("name, description, brand_voice, visual_style, audience, benefits, offer, objective, product_image_url")
+    .select("name, description, brand_voice, visual_style, audience, benefits, offer, objective, product_image_url, landing_page_summary")
     .eq("id", campaignId)
     .single();
 
@@ -339,7 +371,7 @@ export async function runAutomatedGeneration(
   const { data: campaign } = await supabase
     .from("campaigns")
     .select(
-      "name, description, brand_voice, visual_style, audience, benefits, offer, objective, auto_generate, product_image_url"
+      "name, description, brand_voice, visual_style, audience, benefits, offer, objective, auto_generate, product_image_url, landing_page_summary"
     )
     .eq("id", campaignId)
     .single();

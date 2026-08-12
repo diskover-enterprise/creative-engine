@@ -356,3 +356,9 @@ alter table generation_jobs add column if not exists clip_id uuid references ad_
 alter table campaigns add column if not exists product_image_url text;
 alter table ad_clips add column if not exists role text not null default 'ugc';
 alter table ad_clips add column if not exists preview_image_url text;
+
+-- Creative Engine — Phase 10 schema addition. `landing_page_summary` holds a
+-- Claude-written paragraph of product info/benefits extracted from
+-- `landing_page_url` at campaign create/edit time, fed into ad concept and
+-- script generation as extra context alongside the campaign's own fields.
+alter table campaigns add column if not exists landing_page_summary text;

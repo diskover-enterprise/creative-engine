@@ -54,7 +54,7 @@ async function getPromptContext(
   const { data: campaign } = await supabase
     .from("campaigns")
     .select(
-      "name, description, brand_voice, visual_style, audience, benefits, offer, objective, product_image_url"
+      "name, description, brand_voice, visual_style, audience, benefits, offer, objective, product_image_url, landing_page_summary"
     )
     .eq("id", campaignId)
     .single();
