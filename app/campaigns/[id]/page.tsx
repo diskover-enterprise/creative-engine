@@ -77,7 +77,7 @@ export default async function CampaignDetailPage({
       {campaign.product_image_url ? (
         <div className="mt-4">
           <p className="text-xs font-medium uppercase tracking-wide text-foreground/40">
-            Product Image
+            Reference Product
           </p>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img

@@ -21,18 +21,69 @@ interface SubmitResponse {
   response: { id: string };
 }
 
-export async function submitStitch(clipUrls: string[]) {
-  const clips = clipUrls.map((src, index) => ({
-    asset: { type: "video", src },
+// Background music volume while a clip's voiceover is playing vs. not --
+// same duck/un-duck split as the manual ffmpeg mix this replaces (see
+// app/ad-sets/actions.ts's uploadClipVoiceover for how voiceoverUrl gets set).
+const MUSIC_VOLUME_DUCKED = 0.25;
+const MUSIC_VOLUME_FULL = 0.7;
+
+export interface StitchClip {
+  url: string;
+  voiceoverUrl: string | null;
+}
+
+export async function submitStitch(clips: StitchClip[], musicUrl: string | null) {
+  const videoClips = clips.map(({ url }, index) => ({
+    asset: { type: "video", src: url },
     start: index * CLIP_DURATION_SECONDS,
     length: CLIP_DURATION_SECONDS,
   }));
+
+  // A voiceover is shorter than its clip's 5s slot -- placed at the same
+  // start/length as its video clip, it just finishes early and leaves the
+  // rest of that slot silent on this track (same effect as the manual
+  // mix's per-clip `adelay`).
+  const voiceoverClips = clips.flatMap(({ voiceoverUrl }, index) =>
+    voiceoverUrl
+      ? [
+          {
+            asset: { type: "audio", src: voiceoverUrl },
+            start: index * CLIP_DURATION_SECONDS,
+            length: CLIP_DURATION_SECONDS,
+          },
+        ]
+      : []
+  );
+
+  // Music is sliced into one clip per clip-slot, each `trim`-ing further
+  // into the same source file so it keeps advancing continuously instead of
+  // restarting per segment -- the sliced-clip equivalent of the manual mix's
+  // time-varying ffmpeg volume expression, ducking under any slot that has
+  // a voiceover.
+  const musicClips = musicUrl
+    ? clips.map(({ voiceoverUrl }, index) => ({
+        asset: {
+          type: "audio",
+          src: musicUrl,
+          trim: index * CLIP_DURATION_SECONDS,
+          volume: voiceoverUrl ? MUSIC_VOLUME_DUCKED : MUSIC_VOLUME_FULL,
+        },
+        start: index * CLIP_DURATION_SECONDS,
+        length: CLIP_DURATION_SECONDS,
+      }))
+    : [];
+
+  const tracks = [
+    { clips: videoClips },
+    ...(voiceoverClips.length > 0 ? [{ clips: voiceoverClips }] : []),
+    ...(musicClips.length > 0 ? [{ clips: musicClips }] : []),
+  ];
 
   const response = await fetch(`${BASE_URL}/render`, {
     method: "POST",
     headers: authHeaders(),
     body: JSON.stringify({
-      timeline: { tracks: [{ clips }] },
+      timeline: { tracks },
       output: { format: "mp4", resolution: "hd" },
     }),
   });

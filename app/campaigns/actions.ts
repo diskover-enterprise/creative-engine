@@ -117,6 +117,30 @@ async function uploadProductImage(
   return publicUrl;
 }
 
+// Optional per-campaign background music, mixed under the whole stitched
+// video with ducking under any clip that has a voiceover (see
+// lib/shotstack.ts).
+async function uploadMusic(
+  supabase: ReturnType<typeof getSupabaseServerClient>,
+  campaignId: string,
+  music: File
+) {
+  const path = `${campaignId}/music-${Date.now()}-${music.name}`;
+  const { error } = await supabase.storage
+    .from("campaign-music")
+    .upload(path, music, { contentType: music.type });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const {
+    data: { publicUrl },
+  } = supabase.storage.from("campaign-music").getPublicUrl(path);
+
+  return publicUrl;
+}
+
 async function uploadCampaignImages(
   supabase: ReturnType<typeof getSupabaseServerClient>,
   campaignId: string,
@@ -198,7 +222,17 @@ export async function createCampaign(
       const productImageUrl = await uploadProductImage(supabase, campaign.id, productImage);
       await supabase.from("campaigns").update({ product_image_url: productImageUrl }).eq("id", campaign.id);
     } catch (err) {
-      return { error: err instanceof Error ? err.message : "Failed to upload product image." };
+      return { error: err instanceof Error ? err.message : "Failed to upload reference product." };
+    }
+  }
+
+  const music = formData.get("music");
+  if (music instanceof File && music.size > 0) {
+    try {
+      const musicUrl = await uploadMusic(supabase, campaign.id, music);
+      await supabase.from("campaigns").update({ music_url: musicUrl }).eq("id", campaign.id);
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : "Failed to upload music." };
     }
   }
 
@@ -237,7 +271,7 @@ export async function updateCampaign(
 
   const { data: existing } = await supabase
     .from("campaigns")
-    .select("logo_url, product_image_url, landing_page_url, landing_page_summary")
+    .select("logo_url, product_image_url, music_url, landing_page_url, landing_page_summary")
     .eq("id", campaignId)
     .single();
 
@@ -282,7 +316,22 @@ export async function updateCampaign(
         }
       }
     } catch (err) {
-      return { error: err instanceof Error ? err.message : "Failed to upload product image." };
+      return { error: err instanceof Error ? err.message : "Failed to upload reference product." };
+    }
+  }
+
+  const music = formData.get("music");
+  if (music instanceof File && music.size > 0) {
+    try {
+      updates.music_url = await uploadMusic(supabase, campaignId, music);
+      if (existing?.music_url) {
+        const oldPath = getStoragePathFromPublicUrl(existing.music_url, "campaign-music");
+        if (oldPath) {
+          await supabase.storage.from("campaign-music").remove([oldPath]);
+        }
+      }
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : "Failed to upload music." };
     }
   }
 
@@ -489,7 +538,7 @@ export async function deleteCampaign(campaignId: string) {
 
   const { data: campaign } = await supabase
     .from("campaigns")
-    .select("logo_url, product_image_url")
+    .select("logo_url, product_image_url, music_url")
     .eq("id", campaignId)
     .single();
 
@@ -517,6 +566,13 @@ export async function deleteCampaign(campaignId: string) {
     const productImagePath = getStoragePathFromPublicUrl(campaign.product_image_url, "product-images");
     if (productImagePath) {
       await supabase.storage.from("product-images").remove([productImagePath]);
+    }
+  }
+
+  if (campaign?.music_url) {
+    const musicPath = getStoragePathFromPublicUrl(campaign.music_url, "campaign-music");
+    if (musicPath) {
+      await supabase.storage.from("campaign-music").remove([musicPath]);
     }
   }
 

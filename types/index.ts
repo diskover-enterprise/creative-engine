@@ -22,6 +22,7 @@ export interface Campaign {
   end_date: string | null;
   notes: string | null;
   product_image_url: string | null;
+  music_url: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -93,6 +94,7 @@ export interface AdClip {
   status: AdClipStatus;
   asset_url: string | null;
   preview_image_url: string | null;
+  voiceover_url: string | null;
   error: string | null;
   created_at: string;
   updated_at: string;

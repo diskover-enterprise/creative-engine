@@ -23,7 +23,7 @@ export default function CampaignForm({
   campaign?: Campaign;
   existingImages?: ExistingImage[];
   submitLabel: string;
-  // "create" shows just Name, Description, and a Product Image upload --
+  // "create" shows just Name, Description, and a Reference Product upload --
   // everything else is still a real column, editable later from here.
   mode?: "create" | "edit";
 }) {
@@ -39,8 +39,19 @@ export default function CampaignForm({
           className="h-24 w-24 rounded object-cover"
         />
       ) : null}
-      <FormField label={campaign?.product_image_url ? "Replace Product Image" : "Product Image (optional)"}>
+      <FormField label={campaign?.product_image_url ? "Replace Reference Product" : "Reference Product (optional)"}>
         <input type="file" name="product_image" accept="image/*" className={inputClass} />
+      </FormField>
+    </>
+  );
+
+  const musicField = (
+    <>
+      {campaign?.music_url ? (
+        <audio src={campaign.music_url} controls className="h-10 w-full" />
+      ) : null}
+      <FormField label={campaign?.music_url ? "Replace Background Music" : "Background Music (optional)"}>
+        <input type="file" name="music" accept="audio/*" className={inputClass} />
       </FormField>
     </>
   );
@@ -84,6 +95,7 @@ export default function CampaignForm({
         </p>
 
         {productImageField}
+        {musicField}
 
         <SubmitButton pending={pending} label={submitLabel} />
       </form>
@@ -108,6 +120,7 @@ export default function CampaignForm({
       </FormField>
 
       {productImageField}
+      {musicField}
 
       <FormField label="Brand Voice">
         <textarea

@@ -362,3 +362,20 @@ alter table ad_clips add column if not exists preview_image_url text;
 -- `landing_page_url` at campaign create/edit time, fed into ad concept and
 -- script generation as extra context alongside the campaign's own fields.
 alter table campaigns add column if not exists landing_page_summary text;
+
+-- Creative Engine — Phase 11 schema addition (voiceover + background music
+-- mixing). `ad_clips.voiceover_url` holds a hand-uploaded voiceover file for
+-- a clip (see uploadClipVoiceover in app/ad-sets/actions.ts -- no TTS
+-- provider wired up yet). `campaigns.music_url` is an optional background
+-- track mixed under the whole stitched video, ducked under any clip that
+-- has a voiceover (see lib/shotstack.ts).
+alter table ad_clips add column if not exists voiceover_url text;
+alter table campaigns add column if not exists music_url text;
+
+insert into storage.buckets (id, name, public)
+values ('ad-voiceovers', 'ad-voiceovers', true)
+on conflict (id) do nothing;
+
+insert into storage.buckets (id, name, public)
+values ('campaign-music', 'campaign-music', true)
+on conflict (id) do nothing;

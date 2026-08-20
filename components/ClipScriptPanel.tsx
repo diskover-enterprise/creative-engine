@@ -8,6 +8,8 @@ import {
   updateAdClipScript,
   generateAllClips,
   stitchAdClips,
+  uploadClipVoiceover,
+  removeClipVoiceover,
 } from "@/app/ad-sets/actions";
 import type { AdClip, AdClipRole } from "@/types";
 
@@ -56,6 +58,7 @@ export default function ClipScriptPanel({
   );
   const [clipCount, setClipCount] = useState(DEFAULT_CLIP_COUNT);
   const [roles, setRoles] = useState<AdClipRole[]>(Array(DEFAULT_CLIP_COUNT).fill("ugc"));
+  const [uploadingVoiceoverFor, setUploadingVoiceoverFor] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   function pollJobs(jobIds: string[]) {
@@ -135,6 +138,30 @@ export default function ClipScriptPanel({
       return;
     }
     pollJobs(result.jobIds);
+  }
+
+  async function handleVoiceoverUpload(clip: AdClip, file: File) {
+    setError(null);
+    setUploadingVoiceoverFor(clip.id);
+    const result = await uploadClipVoiceover(clip.id, adSetId, clip.clip_number, file);
+    setUploadingVoiceoverFor(null);
+    if ("error" in result) {
+      setError(result.error);
+      return;
+    }
+    router.refresh();
+  }
+
+  async function handleVoiceoverRemove(clip: AdClip) {
+    setError(null);
+    setUploadingVoiceoverFor(clip.id);
+    const result = await removeClipVoiceover(clip.id, adSetId);
+    setUploadingVoiceoverFor(null);
+    if ("error" in result) {
+      setError(result.error);
+      return;
+    }
+    router.refresh();
   }
 
   async function handleStitch() {
@@ -243,6 +270,42 @@ export default function ClipScriptPanel({
             {clip.status === "failed" && clip.error ? (
               <p className="mt-1 text-xs text-red-500">{clip.error}</p>
             ) : null}
+
+            <div className="mt-2 flex items-center gap-2">
+              {clip.voiceover_url ? (
+                <>
+                  <audio src={clip.voiceover_url} controls className="h-8 flex-1" />
+                  <button
+                    type="button"
+                    onClick={() => handleVoiceoverRemove(clip)}
+                    disabled={uploadingVoiceoverFor === clip.id}
+                    className="shrink-0 text-xs text-red-500 disabled:opacity-50"
+                  >
+                    Remove
+                  </button>
+                </>
+              ) : (
+                <label className="text-xs text-foreground/60">
+                  {uploadingVoiceoverFor === clip.id ? (
+                    "Uploading voiceover..."
+                  ) : (
+                    <>
+                      Voiceover:{" "}
+                      <input
+                        type="file"
+                        accept="audio/*"
+                        className="text-xs"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleVoiceoverUpload(clip, file);
+                          e.target.value = "";
+                        }}
+                      />
+                    </>
+                  )}
+                </label>
+              )}
+            </div>
           </li>
         ))}
       </ul>

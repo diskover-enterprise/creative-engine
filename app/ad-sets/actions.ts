@@ -99,6 +99,90 @@ async function generateImageAndWait(
   throw new Error("Timed out waiting for the B-roll scene image to generate.");
 }
 
+// Voiceovers are recorded/sourced by hand and uploaded per clip (no
+// text-to-speech provider wired up yet) -- see uploadClipVoiceover below.
+// Any clip can have one regardless of role; stitchAdClips just uses
+// whatever's set on ad_clips.voiceover_url when it builds the Shotstack
+// timeline.
+export async function uploadClipVoiceover(
+  clipId: string,
+  adSetId: string,
+  clipNumber: number,
+  file: File
+): Promise<{ error: string } | { voiceoverUrl: string }> {
+  const supabase = getSupabaseServerClient();
+
+  const { data: existing } = await supabase
+    .from("ad_clips")
+    .select("voiceover_url")
+    .eq("id", clipId)
+    .single();
+
+  const path = `${adSetId}/clip-${clipNumber}-voiceover-${Date.now()}-${file.name}`;
+  const { error: uploadError } = await supabase.storage
+    .from("ad-voiceovers")
+    .upload(path, file, { contentType: file.type });
+
+  if (uploadError) {
+    return { error: uploadError.message };
+  }
+
+  const {
+    data: { publicUrl },
+  } = supabase.storage.from("ad-voiceovers").getPublicUrl(path);
+
+  const { error } = await supabase
+    .from("ad_clips")
+    .update({ voiceover_url: publicUrl })
+    .eq("id", clipId);
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  if (existing?.voiceover_url) {
+    const oldPath = getStoragePathFromPublicUrl(existing.voiceover_url, "ad-voiceovers");
+    if (oldPath) {
+      await supabase.storage.from("ad-voiceovers").remove([oldPath]);
+    }
+  }
+
+  revalidatePath(`/ad-sets/${adSetId}`);
+  return { voiceoverUrl: publicUrl };
+}
+
+export async function removeClipVoiceover(
+  clipId: string,
+  adSetId: string
+): Promise<{ error: string } | { success: true }> {
+  const supabase = getSupabaseServerClient();
+
+  const { data: clip } = await supabase
+    .from("ad_clips")
+    .select("voiceover_url")
+    .eq("id", clipId)
+    .single();
+
+  if (clip?.voiceover_url) {
+    const path = getStoragePathFromPublicUrl(clip.voiceover_url, "ad-voiceovers");
+    if (path) {
+      await supabase.storage.from("ad-voiceovers").remove([path]);
+    }
+  }
+
+  const { error } = await supabase
+    .from("ad_clips")
+    .update({ voiceover_url: null })
+    .eq("id", clipId);
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath(`/ad-sets/${adSetId}`);
+  return { success: true };
+}
+
 export async function createAdSet(
   campaignId: string,
   _prevState: ActionState,
@@ -337,7 +421,7 @@ export async function generateAllClips(
 
   const { data: clips } = await supabase
     .from("ad_clips")
-    .select("id, script, status, role")
+    .select("id, clip_number, script, status, role")
     .eq("ad_set_id", adSetId)
     .order("clip_number", { ascending: true });
 
@@ -403,6 +487,9 @@ export async function generateAllClips(
         .single();
 
       if (error || !job) continue;
+      // voiceover_url is deliberately left untouched here -- voiceovers are
+      // uploaded by hand (see uploadClipVoiceover) independently of video
+      // generation, so this update must not clobber one already set.
       await supabase
         .from("ad_clips")
         .update({ status: "processing", preview_image_url: previewImageUrl })
@@ -429,7 +516,7 @@ export async function stitchAdClips(
 
   const { data: clips } = await supabase
     .from("ad_clips")
-    .select("clip_number, status, asset_url")
+    .select("clip_number, status, asset_url, voiceover_url")
     .eq("ad_set_id", adSetId)
     .order("clip_number", { ascending: true });
 
@@ -442,11 +529,30 @@ export async function stitchAdClips(
     return { error: "All clips must finish generating before stitching." };
   }
 
-  const clipUrls = clips.map((clip) => clip.asset_url!);
+  const stitchClips = clips.map((clip) => ({
+    url: clip.asset_url!,
+    voiceoverUrl: clip.voiceover_url,
+  }));
+
+  const { data: adSet } = await supabase
+    .from("ad_sets")
+    .select("campaign_id")
+    .eq("id", adSetId)
+    .single();
+
+  let musicUrl: string | null = null;
+  if (adSet) {
+    const { data: campaign } = await supabase
+      .from("campaigns")
+      .select("music_url")
+      .eq("id", adSet.campaign_id)
+      .single();
+    musicUrl = campaign?.music_url ?? null;
+  }
 
   let renderId: string;
   try {
-    renderId = await submitStitch(clipUrls);
+    renderId = await submitStitch(stitchClips, musicUrl);
   } catch (err) {
     return { error: err instanceof Error ? err.message : "Failed to start stitching." };
   }
