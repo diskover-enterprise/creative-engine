@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 import { getStoragePathFromPublicUrl } from "@/lib/supabase/storage";
-import { buildAdSetPrompt } from "@/lib/promptTemplate";
+import { buildAdSetPrompt, buildClipPrompt } from "@/lib/promptTemplate";
 import { submitImageGeneration } from "@/lib/fal";
 import {
   submitVideoGeneration,
@@ -455,24 +455,27 @@ export async function generateAllClips(
     .eq("id", adSet.campaign_id)
     .single();
 
+  const hasProductImage = Boolean(campaign?.product_image_url);
+
   const jobIds: string[] = [];
   for (const clip of pendingClips) {
     try {
       let sourceImageUrl: string;
       let previewImageUrl: string | null = null;
+      const clipPrompt = buildClipPrompt(clip.script, hasProductImage);
 
       if (clip.role === "ugc") {
         sourceImageUrl = modelImageUrl!;
       } else {
         sourceImageUrl = await generateImageAndWait(
-          clip.script,
+          clipPrompt,
           adSet.aspect_ratio,
           campaign?.product_image_url ?? undefined
         );
         previewImageUrl = sourceImageUrl;
       }
 
-      const requestId = await submitVideoGeneration(sourceImageUrl, clip.script);
+      const requestId = await submitVideoGeneration(sourceImageUrl, clipPrompt);
       const { data: job, error } = await supabase
         .from("generation_jobs")
         .insert({
@@ -481,7 +484,7 @@ export async function generateAllClips(
           provider: "higgsfield",
           external_request_id: requestId,
           status: "processing",
-          prompt: clip.script,
+          prompt: clipPrompt,
         })
         .select("id")
         .single();
@@ -495,8 +498,17 @@ export async function generateAllClips(
         .update({ status: "processing", preview_image_url: previewImageUrl })
         .eq("id", clip.id);
       jobIds.push(job.id);
-    } catch {
-      // Leave this clip in draft/failed -- it can be retried individually later.
+    } catch (err) {
+      // Mark failed (not left silently in draft) so the UI shows why and the
+      // clip stays retryable via "Approve & Generate Clips" -- pendingClips
+      // above already treats 'failed' the same as 'draft'.
+      await supabase
+        .from("ad_clips")
+        .update({
+          status: "failed",
+          error: err instanceof Error ? err.message : "Failed to start clip generation.",
+        })
+        .eq("id", clip.id);
     }
   }
 

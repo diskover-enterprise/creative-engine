@@ -1,5 +1,15 @@
 import type { Campaign, AdSet } from "@/types";
 
+// Appended to every generated prompt, deterministically -- not left to Claude
+// to remember every time. Modeled on a hand-written prompt the user got much
+// better Higgsfield results with: dense technical/realism language plus an
+// explicit negative list, rather than a vague "make it look nice" request.
+const REALISM_SUFFIX =
+  "Photorealistic commercial product footage: physically accurate materials, lighting, reflections, shadows, and depth of field. Avoid label or text morphing, fake lettering, warped or malformed hands, floating or physically impossible objects, unrealistic liquid or material behavior, artificial glow, or lens flares.";
+
+const PRODUCT_FIDELITY_LINE =
+  "Preserve the supplied reference product's real packaging, label, logo, colors, and proportions exactly as shown -- do not invent or alter them.";
+
 // Deterministic prompt assembly for an Ad Set. No AI model is called here --
 // this just formats the structured brief (plus inherited Campaign context)
 // into a single prompt string a future image/video generation step could
@@ -7,7 +17,14 @@ import type { Campaign, AdSet } from "@/types";
 export function buildAdSetPrompt(
   campaign: Pick<
     Campaign,
-    "name" | "description" | "brand_voice" | "visual_style" | "audience" | "benefits" | "offer"
+    | "name"
+    | "description"
+    | "brand_voice"
+    | "visual_style"
+    | "audience"
+    | "benefits"
+    | "offer"
+    | "product_image_url"
   >,
   adSet: Pick<
     AdSet,
@@ -55,5 +72,20 @@ export function buildAdSetPrompt(
     );
   }
 
+  lines.push(REALISM_SUFFIX);
+  if (campaign.product_image_url) lines.push(PRODUCT_FIDELITY_LINE);
+
+  return lines.join(" ");
+}
+
+// Same realism/negative-prompt/product-fidelity suffix, for a video Ad Set's
+// per-clip script (written by Claude in generateClipScript, then sent to
+// Higgsfield as-is for that clip's still image and video generation). Kept
+// separate from the clip's stored `script` column so the user still sees and
+// edits clean creative text -- this only wraps it at the point of actually
+// calling Higgsfield (see generateAllClips in app/ad-sets/actions.ts).
+export function buildClipPrompt(script: string, hasProductImage: boolean) {
+  const lines = [script, REALISM_SUFFIX];
+  if (hasProductImage) lines.push(PRODUCT_FIDELITY_LINE);
   return lines.join(" ");
 }

@@ -11,7 +11,11 @@ export const AdSetSuggestionSchema = z.object({
     .string()
     .describe("The core creative idea or hook this ad set is built around"),
   target_emotion: z.string().describe("The primary emotion this ad set should evoke"),
-  setting_scene: z.string().describe("Where/how the product is shown"),
+  setting_scene: z
+    .string()
+    .describe(
+      "The scene, written with the specificity of a professional image/video-generation prompt: setting and lighting, and the exact physical composition/action (not 'shows the product' but the concrete physical detail -- what it's sitting on or being held by, the surrounding objects, the moment being captured). Realism, quality, and product-fidelity instructions are appended separately -- do not repeat them here."
+    ),
   key_message: z.string().describe("The single most important message to convey"),
   call_to_action: z.string().describe("Suggested call-to-action text"),
   aspect_ratio: z.enum(["1:1", "4:5", "9:16", "16:9"]),
@@ -176,7 +180,7 @@ Shot list (in order, ${roles.length} clips total, ~5 seconds each): ${roles
           description: z
             .string()
             .describe(
-              "What happens in this ~5 second clip: the action, framing, and any on-camera line -- written as a direct instruction to a UGC creator/video model, not as prose narration. A UGC clip shows the creator on camera (with dialogue if natural); a B-ROLL clip must not describe any person speaking or appearing on camera -- product/scene/hands only."
+              "A dense, technically specific instruction for this ~5 second clip -- written the way a professional video-generation prompt is written, not prose narration. Cover, in order: the setting and lighting; the specific physical subject/action (what hands or the product are doing, in concrete detail -- not 'shows the product' but the actual physical motion); and the camera's behavior (e.g. a subtle controlled push-in, static locked-off shot, slow pan -- pick one deliberately, don't default to generic movement). A UGC clip additionally includes the on-camera creator and any spoken line; a B-ROLL clip must not describe any person speaking or appearing on camera -- product/scene/hands only. (Realism/quality/product-fidelity instructions are appended separately -- do not repeat them here.)"
             ),
         })
       )
